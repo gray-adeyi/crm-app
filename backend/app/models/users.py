@@ -1,6 +1,8 @@
-from sqlalchemy import BOOLEAN, String, TIMESTAMP, TEXT
-from sqlalchemy.orm import relationship, Mapped, mapped_column
 from datetime import datetime
+
+from sqlalchemy import BOOLEAN, TEXT, TIMESTAMP, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.includes.models import BaseDBModel, TimestampedModelMixin
 
 

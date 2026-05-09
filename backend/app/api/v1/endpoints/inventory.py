@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, or_
 
-from app.api.deps import DbSession, SaasUser
-from app.models.entities import InventoryMovement, Product
+from app.api.deps import AsyncDBSession, SaasUser
+from app.models import InventoryMovement, Product
 from app.schemas.inventory import (
     InventoryAnalyticsResponse,
     ProductCreate,
@@ -18,14 +18,18 @@ router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 
 def _get_owned_product_or_404(db, product_id: int, user_id: int) -> Product:
-    row = db.query(Product).filter(Product.id == product_id, Product.user_id == user_id).first()
+    row = (
+        db.query(Product)
+        .filter(Product.id == product_id, Product.user_id == user_id)
+        .first()
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Inventory item not found")
     return row
 
 
 @router.post("", response_model=ProductResponse)
-def create_product(payload: ProductCreate, db: DbSession, user: SaasUser):
+async def create_product(payload: ProductCreate, db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "inventory:write")
 
     qty = int(payload.quantity_in_stock or 0)
@@ -65,8 +69,8 @@ def create_product(payload: ProductCreate, db: DbSession, user: SaasUser):
 
 
 @router.get("", response_model=list[ProductResponse])
-def list_products(
-    db: DbSession,
+async def list_products(
+    db: AsyncDBSession,
     user: SaasUser,
     search: str | None = Query(default=None, max_length=128),
     category: str | None = Query(default=None, max_length=64),
@@ -84,7 +88,9 @@ def list_products(
 
 
 @router.put("/{product_id}", response_model=ProductResponse)
-def update_product(product_id: int, payload: ProductUpdate, db: DbSession, user: SaasUser):
+def update_product(
+    product_id: int, payload: ProductUpdate, db: AsyncDBSession, user: SaasUser
+):
     assert_permission(user, "inventory:write")
 
     row = _get_owned_product_or_404(db, product_id, user.id)
@@ -117,21 +123,40 @@ def update_product(product_id: int, payload: ProductUpdate, db: DbSession, user:
 
 
 @router.delete("/{product_id}")
-def delete_product(product_id: int, db: DbSession, user: SaasUser):
+async def delete_product(product_id: int, db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "inventory:delete")
-    row = db.query(Product).filter(Product.id == product_id, Product.user_id == user.id).first()
+    row = (
+        db.query(Product)
+        .filter(Product.id == product_id, Product.user_id == user.id)
+        .first()
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Inventory item not found")
     pid = row.id
-    log_user_activity(db, user_id=user.id, action="delete_product", entity_type="product", entity_id=pid, summary=f"Product #{pid} deleted")
-    log_transaction_event(db, user_id=user.id, category="inventory", summary=f"Product #{pid} deleted", payload={"product_id": pid})
+    log_user_activity(
+        db,
+        user_id=user.id,
+        action="delete_product",
+        entity_type="product",
+        entity_id=pid,
+        summary=f"Product #{pid} deleted",
+    )
+    log_transaction_event(
+        db,
+        user_id=user.id,
+        category="inventory",
+        summary=f"Product #{pid} deleted",
+        payload={"product_id": pid},
+    )
     db.delete(row)
     db.commit()
     return {"message": "Deleted"}
 
 
 @router.post("/{product_id}/restock", response_model=ProductResponse)
-def restock_product(product_id: int, payload: RestockRequest, db: DbSession, user: SaasUser):
+async def restock_product(
+    product_id: int, payload: RestockRequest, db: AsyncDBSession, user: SaasUser
+):
     assert_permission(user, "inventory:write")
     row = _get_owned_product_or_404(db, product_id, user.id)
 
@@ -167,11 +192,13 @@ def restock_product(product_id: int, payload: RestockRequest, db: DbSession, use
 
 
 @router.get("/analytics", response_model=InventoryAnalyticsResponse)
-def inventory_analytics(db: DbSession, user: SaasUser):
+async def inventory_analytics(db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "inventory:read")
 
     total_value = int(
-        db.query(func.coalesce(func.sum(Product.unit_price * Product.quantity_in_stock), 0))
+        db.query(
+            func.coalesce(func.sum(Product.unit_price * Product.quantity_in_stock), 0)
+        )
         .filter(Product.user_id == user.id)
         .scalar()
         or 0
@@ -187,7 +214,11 @@ def inventory_analytics(db: DbSession, user: SaasUser):
         .filter(
             Product.user_id == user.id,
             Product.quantity_in_stock > 0,
-            or_(Product.is_low_stock == True, (Product.reorder_threshold > 0) & (Product.quantity_in_stock <= Product.reorder_threshold)),  # noqa: E712
+            or_(
+                Product.is_low_stock == True,
+                (Product.reorder_threshold > 0)
+                & (Product.quantity_in_stock <= Product.reorder_threshold),
+            ),  # noqa: E712
         )
         .scalar()
         or 0
@@ -198,4 +229,3 @@ def inventory_analytics(db: DbSession, user: SaasUser):
         low_stock_items=low_stock,
         out_of_stock_items=out_of_stock,
     )
-

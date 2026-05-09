@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-
 _DEFAULT = {
     "email_order_reminders": True,
     "email_low_stock": True,

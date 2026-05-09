@@ -3,7 +3,9 @@
 from io import BytesIO
 
 
-def monthly_report_pdf_bytes(*, business_name: str, period_label: str, metrics: dict) -> bytes:
+def monthly_report_pdf_bytes(
+    *, business_name: str, period_label: str, metrics: dict
+) -> bytes:
     try:
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas

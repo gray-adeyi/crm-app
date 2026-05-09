@@ -88,7 +88,11 @@ def build_low_stock_email_html(
     peak_quantity: int,
 ) -> str:
     name = business_name or "Your business"
-    peak_line = f"<tr><td style=\"padding:10px 0;color:#334155;\">Peak stock</td><td style=\"padding:10px 0;text-align:right;font-weight:600;color:#0f172a;\">{int(peak_quantity)}</td></tr>" if peak_quantity else ""
+    peak_line = (
+        f'<tr><td style="padding:10px 0;color:#334155;">Peak stock</td><td style="padding:10px 0;text-align:right;font-weight:600;color:#0f172a;">{int(peak_quantity)}</td></tr>'
+        if peak_quantity
+        else ""
+    )
     return f"""<!DOCTYPE html>
 <html>
   <head><meta charset="utf-8" /><title>Low stock alert</title></head>
@@ -164,7 +168,11 @@ def build_saas_monthly_report_html(*, user, metrics: dict, month_label: str) -> 
     if not low_rows:
         low_rows = '<tr><td colspan="2" style="padding:12px 0;color:#94a3b8;">No low-stock SKUs flagged.</td></tr>'
 
-    trial_note = "Trial active — enjoy every premium module." if metrics.get("trial_active") else "Subscription required after trial — upgrade anytime in Billing."
+    trial_note = (
+        "Trial active — enjoy every premium module."
+        if metrics.get("trial_active")
+        else "Subscription required after trial — upgrade anytime in Billing."
+    )
 
     return f"""<!DOCTYPE html>
 <html>
@@ -211,7 +219,10 @@ def build_saas_monthly_report_html(*, user, metrics: dict, month_label: str) -> 
 def build_activity_digest_email_html(*, user, acts, txs, month_label: str) -> str:
     brand = user.business_name or "Your business"
     bullets_a = "".join(
-        [f'<li>{a.summary or a.action} — <span style="color:#64748b">{a.entity_type}</span></li>' for a in acts[:25]]
+        [
+            f'<li>{a.summary or a.action} — <span style="color:#64748b">{a.entity_type}</span></li>'
+            for a in acts[:25]
+        ]
     )
     if not bullets_a:
         bullets_a = "<li>No recorded edits this month.</li>"
@@ -241,7 +252,15 @@ def build_activity_digest_email_html(*, user, acts, txs, month_label: str) -> st
 </html>"""
 
 
-def build_verification_otp_email_html(*, company_name: str | None, email: str, otp_code: str, expires_minutes: int, support_email: str, app_url: str) -> str:
+def build_verification_otp_email_html(
+    *,
+    company_name: str | None,
+    email: str,
+    otp_code: str,
+    expires_minutes: int,
+    support_email: str,
+    app_url: str,
+) -> str:
     brand = company_name or "Vendora"
     return f"""<!DOCTYPE html>
 <html>
@@ -271,5 +290,3 @@ def build_verification_otp_email_html(*, company_name: str | None, email: str, o
     </td></tr></table>
   </body>
 </html>"""
-
-

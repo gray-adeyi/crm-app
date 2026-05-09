@@ -4,21 +4,26 @@ import json
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from app.api.deps import DbSession
-from app.core.config import get_settings
+from app.api.deps import AsyncDBSession
+from app.core.config import settings
 from app.services.webhook_service import process_paystack_event
 
 router = APIRouter(tags=["webhooks"])
 
 
 @router.post("/webhooks/paystack")
-async def paystack_webhook(request: Request, db: DbSession, x_paystack_signature: str | None = Header(None)):
+async def paystack_webhook(
+    request: Request,
+    db: AsyncDBSession,
+    x_paystack_signature: str | None = Header(None),
+):
     body = await request.body()
     raw = body.decode("utf-8", errors="replace")
-    settings = get_settings()
     signing_secret = settings.PAYSTACK_WEBHOOK_SECRET or settings.PAYSTACK_SECRET_KEY
     if signing_secret and x_paystack_signature:
-        digest = hmac.new(signing_secret.encode("utf-8"), body, hashlib.sha512).hexdigest()
+        digest = hmac.new(
+            signing_secret.encode("utf-8"), body, hashlib.sha512
+        ).hexdigest()
         if not hmac.compare_digest(digest, x_paystack_signature):
             raise HTTPException(status_code=400, detail="Invalid Paystack signature")
 
@@ -32,11 +37,17 @@ async def paystack_webhook(request: Request, db: DbSession, x_paystack_signature
 
 
 @router.post("/webhooks/flutterwave")
-async def flutterwave_webhook(request: Request, db: DbSession, verif_hash: str | None = Header(None, alias="verif-hash")):
+async def flutterwave_webhook(
+    request: Request,
+    db: AsyncDBSession,
+    verif_hash: str | None = Header(None, alias="verif-hash"),
+):
     body = await request.body()
     raw = body.decode("utf-8", errors="replace")
-    settings = get_settings()
-    if settings.FLUTTERWAVE_SECRET_HASH and verif_hash != settings.FLUTTERWAVE_SECRET_HASH:
+    if (
+        settings.FLUTTERWAVE_SECRET_HASH
+        and verif_hash != settings.FLUTTERWAVE_SECRET_HASH
+    ):
         raise HTTPException(status_code=400, detail="Invalid Flutterwave hash")
 
     try:
@@ -44,7 +55,7 @@ async def flutterwave_webhook(request: Request, db: DbSession, verif_hash: str |
     except json.JSONDecodeError:
         payload = {}
     reference = (payload.get("data") or {}).get("tx_ref")
-    from app.models.entities import PaymentEvent
+    from app.models import PaymentEvent
 
     db.add(
         PaymentEvent(
@@ -56,5 +67,5 @@ async def flutterwave_webhook(request: Request, db: DbSession, verif_hash: str |
             status="received",
         )
     )
-    db.commit()
+    await db.commit()
     return {"received": True}

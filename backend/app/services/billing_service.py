@@ -2,8 +2,8 @@ from datetime import datetime
 
 from fastapi import HTTPException
 
-from app.core.config import get_settings
-from app.models.entities import BillingTransaction, Invoice, Subscription
+from app.core.config import settings
+from app.models import BillingTransaction, Invoice, Subscription
 from app.services.billing import (
     activate_plan_on_user,
     add_billing_history,
@@ -15,11 +15,20 @@ from app.services.billing import (
     sync_subscription_row,
 )
 from app.services.invoice_service import create_invoice
-from app.services.paystack_service import PaystackError, generate_reference, initialize_transaction, verify_transaction
+from app.services.paystack_service import (
+    PaystackError,
+    generate_reference,
+    initialize_transaction,
+    verify_transaction,
+)
 
 
 def _tx_by_reference(db, reference: str) -> BillingTransaction | None:
-    return db.query(BillingTransaction).filter(BillingTransaction.reference == reference).first()
+    return (
+        db.query(BillingTransaction)
+        .filter(BillingTransaction.reference == reference)
+        .first()
+    )
 
 
 def initialize_subscription_checkout(db, user, plan_id: str) -> BillingTransaction:
@@ -28,7 +37,6 @@ def initialize_subscription_checkout(db, user, plan_id: str) -> BillingTransacti
         raise HTTPException(status_code=400, detail="Invalid plan selected")
 
     reference = generate_reference(user.id, plan["id"])
-    settings = get_settings()
     metadata = {
         "user_id": user.id,
         "plan_id": plan["id"],
@@ -71,7 +79,16 @@ def initialize_subscription_checkout(db, user, plan_id: str) -> BillingTransacti
     return tx
 
 
-def apply_successful_payment(db, *, user, plan_id: str, reference: str, customer_code: str | None, paystack_transaction_id: str | None, paid_at: datetime | None = None) -> BillingTransaction:
+def apply_successful_payment(
+    db,
+    *,
+    user,
+    plan_id: str,
+    reference: str,
+    customer_code: str | None,
+    paystack_transaction_id: str | None,
+    paid_at: datetime | None = None,
+) -> BillingTransaction:
     plan_id = normalize_plan_id(plan_id)
     tx = _tx_by_reference(db, reference)
     if not tx:
@@ -89,11 +106,15 @@ def apply_successful_payment(db, *, user, plan_id: str, reference: str, customer
         db.add(tx)
     else:
         tx.status = "success"
-        tx.paystack_transaction_id = paystack_transaction_id or tx.paystack_transaction_id
+        tx.paystack_transaction_id = (
+            paystack_transaction_id or tx.paystack_transaction_id
+        )
         tx.paid_at = paid_at or tx.paid_at or datetime.utcnow()
 
     from_plan = user.current_plan or user.subscription_plan
-    activate_plan_on_user(user, plan_id, reference=reference, customer_code=customer_code)
+    activate_plan_on_user(
+        user, plan_id, reference=reference, customer_code=customer_code
+    )
     sub = sync_subscription_row(db, user)
     sub.status = "active"
 
@@ -126,7 +147,9 @@ def verify_and_activate_subscription(db, user, reference: str) -> BillingTransac
         raise HTTPException(status_code=404, detail="Transaction not found")
 
     if tx.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Transaction does not belong to this account")
+        raise HTTPException(
+            status_code=403, detail="Transaction does not belong to this account"
+        )
 
     if tx.status == "success":
         return tx
@@ -137,12 +160,16 @@ def verify_and_activate_subscription(db, user, reference: str) -> BillingTransac
         raise HTTPException(status_code=502, detail=str(exc))
 
     status = payload.get("status")
-    plan_id = normalize_plan_id((payload.get("metadata") or {}).get("plan_id") or tx.plan_id)
+    plan_id = normalize_plan_id(
+        (payload.get("metadata") or {}).get("plan_id") or tx.plan_id
+    )
     customer_code = (payload.get("customer") or {}).get("customer_code")
     paid_at = None
     paid_at_str = payload.get("paid_at")
     if paid_at_str:
-        paid_at = datetime.fromisoformat(paid_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        paid_at = datetime.fromisoformat(paid_at_str.replace("Z", "+00:00")).replace(
+            tzinfo=None
+        )
 
     if status == "success":
         return apply_successful_payment(

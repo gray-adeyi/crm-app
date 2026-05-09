@@ -1,56 +1,49 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-import app.models.entities  # noqa: F401 — register ORM tables on Base.metadata
-
 from app.api.errors import register_exception_handlers
 from app.api.v1.router import api_router
-from app.core.config import get_settings
-from app.core.database import Base, engine
-from app.db.migrate import run_sqlite_migrations
+from app.core.config import settings
 
 
-def create_app() -> FastAPI:
-    settings = get_settings()
-    run_sqlite_migrations(engine)
-    Base.metadata.create_all(bind=engine)
+def _start_scheduler(app: FastAPI):
+    try:
+        from app.services.reminder_scheduler import start_reminder_scheduler
 
-    app = FastAPI(title="CRM SaaS API", version="2.0.0")
-    register_exception_handlers(app)
+        app.state.reminder_scheduler = start_reminder_scheduler()
+    except Exception:
+        # Never crash API because scheduler failed
+        logging.getLogger(__name__).exception("Failed to start reminder scheduler")
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(settings.FRONTEND_ORIGINS),
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
-    app.include_router(api_router)
-
-    @app.on_event("startup")
-    def _start_scheduler():  # noqa: ANN001
+def _stop_scheduler(app: FastAPI):
+    sched = getattr(app.state, "reminder_scheduler", None)
+    if sched:
         try:
-            from app.services.reminder_scheduler import start_reminder_scheduler
-
-            app.state.reminder_scheduler = start_reminder_scheduler()
+            sched.shutdown(wait=False)
         except Exception:
-            # Never crash API because scheduler failed
-            import logging
-
-            logging.getLogger(__name__).exception("Failed to start reminder scheduler")
-
-    @app.on_event("shutdown")
-    def _stop_scheduler():  # noqa: ANN001
-        sched = getattr(app.state, "reminder_scheduler", None)
-        if sched:
-            try:
-                sched.shutdown(wait=False)
-            except Exception:
-                import logging
-
-                logging.getLogger(__name__).exception("Failed to stop reminder scheduler")
-    return app
+            logging.getLogger(__name__).exception("Failed to stop reminder scheduler")
 
 
-app = create_app()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    register_exception_handlers(app)
+    _start_scheduler(app)
+    yield
+    _stop_scheduler(app)
+
+
+app = FastAPI(title="CRM SaaS API", version="2.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.all_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(api_router)

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
-from app.api.deps import CurrentUser, DbSession
-from app.models.entities import BillingTransaction, User
+from app.api.deps import AsyncDBSession, CurrentUser
+from app.models import BillingTransaction, User
 from app.schemas.billing import (
     BillingMeResponse,
     CancelSubscriptionRequest,
@@ -10,7 +10,6 @@ from app.schemas.billing import (
     VerifyTransactionRequest,
 )
 from app.services.billing import SUBSCRIPTION_PLANS, normalize_plan_id
-from app.services.plan_entitlements import effective_max_customers, trial_unlocks_entitlements
 from app.services.billing_service import (
     billing_snapshot,
     cancel_user_subscription,
@@ -18,15 +17,24 @@ from app.services.billing_service import (
     reactivate_user_subscription,
     verify_and_activate_subscription,
 )
+from app.services.plan_entitlements import (
+    effective_max_customers,
+    trial_unlocks_entitlements,
+)
 
 router = APIRouter(tags=["billing"])
 
 
 def _billing_me_response(user: User) -> BillingMeResponse:
-    effective = normalize_plan_id(user.current_plan or user.subscription_plan or "starter")
+    effective = normalize_plan_id(
+        user.current_plan or user.subscription_plan or "starter"
+    )
     plan = SUBSCRIPTION_PLANS.get(effective, SUBSCRIPTION_PLANS["starter"])
     mc = effective_max_customers(user)
-    limits = {"max_customers": mc, "trial_all_features": trial_unlocks_entitlements(user)}
+    limits = {
+        "max_customers": mc,
+        "trial_all_features": trial_unlocks_entitlements(user),
+    }
     return BillingMeResponse(
         plan_id=effective,
         status=user.subscription_status or "inactive",
@@ -47,7 +55,7 @@ def list_plans():
 
 
 @router.get("/billing/me", response_model=BillingMeResponse)
-def billing_me(user: CurrentUser, db: DbSession):
+async def billing_me(user: CurrentUser, db: AsyncDBSession):
     base = _billing_me_response(user)
     snap = billing_snapshot(db, user)
     base.transactions = [
@@ -77,8 +85,12 @@ def billing_me(user: CurrentUser, db: DbSession):
     return base
 
 
-@router.post("/billing/subscribe/initialize", response_model=SubscribeInitializeResponse)
-def subscribe_initialize(body: SubscribeInitializeRequest, db: DbSession, user: CurrentUser):
+@router.post(
+    "/billing/subscribe/initialize", response_model=SubscribeInitializeResponse
+)
+async def subscribe_initialize(
+    body: SubscribeInitializeRequest, db: AsyncDBSession, user: CurrentUser
+):
     plan_id = normalize_plan_id(body.plan_id.strip())
     if plan_id not in SUBSCRIPTION_PLANS:
         raise HTTPException(status_code=400, detail="Invalid plan selected")
@@ -91,28 +103,32 @@ def subscribe_initialize(body: SubscribeInitializeRequest, db: DbSession, user: 
 
 
 @router.post("/billing/subscribe/verify", response_model=BillingMeResponse)
-def subscribe_verify(body: VerifyTransactionRequest, db: DbSession, user: CurrentUser):
+async def subscribe_verify(
+    body: VerifyTransactionRequest, db: AsyncDBSession, user: CurrentUser
+):
     verify_and_activate_subscription(db, user, body.reference.strip())
     db.refresh(user)
     return billing_me(user, db)
 
 
 @router.post("/billing/cancel", response_model=BillingMeResponse)
-def cancel_billing(body: CancelSubscriptionRequest, db: DbSession, user: CurrentUser):
+async def cancel_billing(
+    body: CancelSubscriptionRequest, db: AsyncDBSession, user: CurrentUser
+):
     cancel_user_subscription(db, user, body.reason)
     db.refresh(user)
     return billing_me(user, db)
 
 
 @router.post("/billing/reactivate", response_model=BillingMeResponse)
-def reactivate_billing(db: DbSession, user: CurrentUser):
+async def reactivate_billing(db: AsyncDBSession, user: CurrentUser):
     reactivate_user_subscription(db, user)
     db.refresh(user)
     return billing_me(user, db)
 
 
 @router.get("/billing/transactions")
-def billing_transactions(db: DbSession, user: CurrentUser):
+async def billing_transactions(db: AsyncDBSession, user: CurrentUser):
     rows = (
         db.query(BillingTransaction)
         .filter(BillingTransaction.user_id == user.id)

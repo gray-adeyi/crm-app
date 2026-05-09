@@ -1,10 +1,16 @@
 from fastapi import APIRouter, HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from app.api.deps import CurrentUser, DbSession
+from app.api.deps import AsyncDBSession, CurrentUser
 from app.core.security import hash_password, verify_password
-from app.models.entities import User
-from app.schemas.user import EmailChangeRequest, MeResponse, OnboardingUpdate, PasswordChangeRequest, UserProfileUpdate
+from app.models import User
+from app.schemas.user import (
+    EmailChangeRequest,
+    MeResponse,
+    OnboardingUpdate,
+    PasswordChangeRequest,
+    UserProfileUpdate,
+)
 from app.services.notification_prefs import serialize_prefs
 
 router = APIRouter(tags=["users"])
@@ -16,7 +22,9 @@ def me(user: CurrentUser):
 
 
 @router.patch("/users/me", response_model=MeResponse)
-def update_profile(payload: UserProfileUpdate, db: DbSession, user: CurrentUser):
+async def update_profile(
+    payload: UserProfileUpdate, db: AsyncDBSession, user: CurrentUser
+):
     if payload.business_name is not None:
         user.business_name = payload.business_name.strip() or None
     if payload.currency is not None:
@@ -28,7 +36,9 @@ def update_profile(payload: UserProfileUpdate, db: DbSession, user: CurrentUser)
     if payload.business_address is not None:
         user.business_address = payload.business_address.strip() or None
     if payload.notification_preferences is not None:
-        user.notification_preferences = serialize_prefs(payload.notification_preferences)
+        user.notification_preferences = serialize_prefs(
+            payload.notification_preferences
+        )
 
     db.commit()
     db.refresh(user)
@@ -36,7 +46,9 @@ def update_profile(payload: UserProfileUpdate, db: DbSession, user: CurrentUser)
 
 
 @router.post("/users/me/onboarding", response_model=MeResponse)
-def complete_onboarding(payload: OnboardingUpdate, db: DbSession, user: CurrentUser):
+async def complete_onboarding(
+    payload: OnboardingUpdate, db: AsyncDBSession, user: CurrentUser
+):
     user.business_name = payload.business_name.strip()
     user.currency = payload.currency.strip().upper()
     user.logo_url = payload.logo_url.strip() if payload.logo_url else None
@@ -47,7 +59,9 @@ def complete_onboarding(payload: OnboardingUpdate, db: DbSession, user: CurrentU
 
 
 @router.post("/users/me/password", response_model=MeResponse)
-def change_password(payload: PasswordChangeRequest, db: DbSession, user: CurrentUser):
+async def change_password(
+    payload: PasswordChangeRequest, db: AsyncDBSession, user: CurrentUser
+):
     if not verify_password(payload.old_password, user.password):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     user.password = hash_password(payload.new_password)
@@ -57,7 +71,9 @@ def change_password(payload: PasswordChangeRequest, db: DbSession, user: Current
 
 
 @router.post("/users/me/email", response_model=MeResponse)
-def change_email(payload: EmailChangeRequest, db: DbSession, user: CurrentUser):
+async def change_email(
+    payload: EmailChangeRequest, db: AsyncDBSession, user: CurrentUser
+):
     if not verify_password(payload.password, user.password):
         raise HTTPException(status_code=400, detail="Password is incorrect")
     new_email = str(payload.new_email).lower().strip()

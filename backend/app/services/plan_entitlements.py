@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from app.services.billing import normalize_plan_id, plan_max_customers as _plan_max_customers
+from app.services.billing import (
+    normalize_plan_id,
+)
+from app.services.billing import (
+    plan_max_customers as _plan_max_customers,
+)
 from app.services.subscription_access import is_trial_effective_now
 
 
@@ -24,7 +29,8 @@ def has_full_dashboard_analytics(user) -> bool:
 
 
 def can_bulk_export(user) -> bool:
-    """Bulk orders/customers exports (Growth+ and Enterprise, plus full trial access)."""
+    """
+    Bulk orders/customers exports (Growth+ and Enterprise, plus full trial access)."""
     if trial_unlocks_entitlements(user):
         return True
     plan_id = normalize_plan_id(user.current_plan or user.subscription_plan)

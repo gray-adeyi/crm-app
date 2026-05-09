@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Query
 from sqlalchemy import desc
 
-from app.api.deps import DbSession, SaasUser
-from app.models.entities import TransactionLog, UserActivityLog, VendorReportDispatch
+from app.api.deps import AsyncDBSession, SaasUser
+from app.models import TransactionLog, UserActivityLog, VendorReportDispatch
 from app.schemas.reports import (
     ActivityLogOut,
     LogsReportResponse,
@@ -18,7 +18,9 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 
 
 @router.get("/logs", response_model=LogsReportResponse)
-def vendor_logs(db: DbSession, user: SaasUser, limit: int = Query(default=250, ge=1, le=1000)):
+async def vendor_logs(
+    db: AsyncDBSession, user: SaasUser, limit: int = Query(default=250, ge=1, le=1000)
+):
     assert_permission(user, "analytics:read")
     acts = (
         db.query(UserActivityLog)
@@ -41,8 +43,8 @@ def vendor_logs(db: DbSession, user: SaasUser, limit: int = Query(default=250, g
 
 
 @router.get("/summary", response_model=ReportSummaryResponse)
-def reports_summary(
-    db: DbSession,
+async def reports_summary(
+    db: AsyncDBSession,
     user: SaasUser,
     date_from: str | None = Query(default=None, max_length=32),
     date_to: str | None = Query(default=None, max_length=32),
@@ -64,7 +66,7 @@ def reports_summary(
 
 
 @router.get("/monthly-dispatches", response_model=MonthlyDispatchListResponse)
-def monthly_dispatches(db: DbSession, user: SaasUser):
+async def monthly_dispatches(db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "analytics:read")
     rows = (
         db.query(VendorReportDispatch)
@@ -73,4 +75,6 @@ def monthly_dispatches(db: DbSession, user: SaasUser):
         .limit(48)
         .all()
     )
-    return MonthlyDispatchListResponse(items=[ReportMonthlyDispatch.model_validate(r) for r in rows])
+    return MonthlyDispatchListResponse(
+        items=[ReportMonthlyDispatch.model_validate(r) for r in rows]
+    )

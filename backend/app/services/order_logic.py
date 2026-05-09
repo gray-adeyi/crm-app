@@ -1,4 +1,6 @@
-ALLOWED_ORDER_STATUSES = frozenset({"pending", "partial", "paid", "delivered", "cancelled"})
+ALLOWED_ORDER_STATUSES = frozenset(
+    {"pending", "partial", "paid", "delivered", "cancelled"}
+)
 
 
 def compute_balance(total_price: int, amount_paid: int) -> int:
@@ -20,7 +22,9 @@ def derive_payment_status(total_price: int, amount_paid: int) -> str:
     return "paid"
 
 
-def compute_order_status(total_price: int, amount_paid: int, preferred_status: str) -> str:
+def compute_order_status(
+    total_price: int, amount_paid: int, preferred_status: str
+) -> str:
     """
     Combines payment rules with optional workflow state `delivered`.
     """

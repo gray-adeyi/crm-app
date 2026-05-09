@@ -2,13 +2,12 @@
 
 import logging
 
-from app.core.config import get_settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 def send_order_status_alert(phone: str, message: str) -> bool:
-    settings = get_settings()
     if settings.TERMII_API_KEY:
         logger.info("Termii configured — would send SMS to %s", phone[:4] + "***")
         return True

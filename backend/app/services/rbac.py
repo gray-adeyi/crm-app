@@ -1,10 +1,9 @@
 from dataclasses import dataclass
-from functools import wraps
 from typing import Callable
 
 from fastapi import HTTPException, status
 
-from app.models.entities import User
+from app.models import User
 
 PERMISSIONS: dict[str, frozenset[str]] = {
     "admin": frozenset(
@@ -39,7 +38,15 @@ PERMISSIONS: dict[str, frozenset[str]] = {
             "analytics:read",
         }
     ),
-    "viewer": frozenset({"orders:read", "customers:read", "analytics:read", "inventory:read", "notifications:read"}),
+    "viewer": frozenset(
+        {
+            "orders:read",
+            "customers:read",
+            "analytics:read",
+            "inventory:read",
+            "notifications:read",
+        }
+    ),
 }
 
 
@@ -49,7 +56,9 @@ def user_permissions(user: User) -> frozenset[str]:
 
 def assert_permission(user: User, permission: str) -> None:
     if permission not in user_permissions(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+        )
 
 
 @dataclass

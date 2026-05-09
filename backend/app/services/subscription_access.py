@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.users import User
 
 
 def utc_now_naive() -> datetime:
@@ -26,13 +29,13 @@ def is_trial_effective_now(user, *, now: datetime | None = None) -> bool:
 
 
 def is_subscription_active_now(user, *, now: datetime | None = None) -> bool:
-    ref = now or utc_now_naive()
     return (user.subscription_status or "").lower() == "active"
 
 
 def finalize_expired_trial(db, user) -> bool:
     """
-    Mutates user row if trial just expired. Returns True if state changed (caller should commit if needed).
+    Mutates user row if trial just expired.
+    Returns True if state changed (caller should commit if needed).
     """
     ref = utc_now_naive()
     status_s = (user.subscription_status or "").lower()
@@ -45,15 +48,15 @@ def finalize_expired_trial(db, user) -> bool:
     return False
 
 
-def ensure_saas_access(db, user) -> None:
+async def ensure_saas_access(db: AsyncSession, user: User) -> None:
     """
     Raises HTTPException when the tenant should not reach premium app surfaces.
     Allows: active subscriptions, active trials, and explicit billing grace periods.
     """
     changed = finalize_expired_trial(db, user)
     if changed:
-        db.commit()
-        db.refresh(user)
+        await db.commit()
+        await db.refresh(user)
 
     ref = utc_now_naive()
     raw_status = (user.subscription_status or "inactive").lower()
@@ -70,5 +73,8 @@ def ensure_saas_access(db, user) -> None:
         if end and ref <= end:
             return
 
-    detail = {"code": "SUBSCRIPTION_REQUIRED", "message": "Choose a subscription plan to continue using Vendora."}
+    detail = {
+        "code": "SUBSCRIPTION_REQUIRED",
+        "message": "Choose a subscription plan to continue using Vendora.",
+    }
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)

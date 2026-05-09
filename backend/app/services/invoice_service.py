@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from app.models.entities import Invoice
+from app.models import Invoice
 
 
 def build_invoice_number(user_id: int, reference: str) -> str:
@@ -8,8 +8,21 @@ def build_invoice_number(user_id: int, reference: str) -> str:
     return f"INV-{stamp}-{user_id}-{reference[-6:]}"
 
 
-def create_invoice(db, *, user_id: int, transaction_id: int | None, plan_id: str, amount: int, reference: str, paid: bool) -> Invoice:
-    existing = db.query(Invoice).filter(Invoice.reference == reference, Invoice.user_id == user_id).first()
+def create_invoice(
+    db,
+    *,
+    user_id: int,
+    transaction_id: int | None,
+    plan_id: str,
+    amount: int,
+    reference: str,
+    paid: bool,
+) -> Invoice:
+    existing = (
+        db.query(Invoice)
+        .filter(Invoice.reference == reference, Invoice.user_id == user_id)
+        .first()
+    )
     if existing:
         return existing
 

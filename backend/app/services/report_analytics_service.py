@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.entities import Customer, Order, Product
+from app.models import Customer, Order, Product
 
 
 def _parse_date(s: str | None) -> date | None:
@@ -21,7 +21,9 @@ def _parse_date(s: str | None) -> date | None:
         return None
 
 
-def window_bounds(*, date_from: str | None, date_to: str | None) -> tuple[datetime, datetime]:
+def window_bounds(
+    *, date_from: str | None, date_to: str | None
+) -> tuple[datetime, datetime]:
     end_d = _parse_date(date_to) or date.today()
     start_d = _parse_date(date_from) or (end_d - timedelta(days=365))
     if start_d > end_d:
@@ -53,7 +55,9 @@ def build_report_summary(
         q = q.filter(Order.customer_id == customer_id)
 
     if order_statuses:
-        st_list = {(s or "").strip().lower() for s in order_statuses if (s or "").strip()}
+        st_list = {
+            (s or "").strip().lower() for s in order_statuses if (s or "").strip()
+        }
         if st_list:
             q = q.filter(Order.status.in_(list(st_list)))
 
@@ -91,12 +95,20 @@ def build_report_summary(
         d = o.created_at.date()
         return a <= d <= b
 
-    monthly_revenue = sum(int(o.amount_paid or 0) for o in rows if in_range_row(o, month_start, now))
-    weekly_revenue = sum(int(o.amount_paid or 0) for o in rows if in_range_row(o, week_start, now))
-    yearly_revenue = sum(int(o.amount_paid or 0) for o in rows if in_range_row(o, year_start, now))
+    monthly_revenue = sum(
+        int(o.amount_paid or 0) for o in rows if in_range_row(o, month_start, now)
+    )
+    weekly_revenue = sum(
+        int(o.amount_paid or 0) for o in rows if in_range_row(o, week_start, now)
+    )
+    yearly_revenue = sum(
+        int(o.amount_paid or 0) for o in rows if in_range_row(o, year_start, now)
+    )
 
     paid_rev = sum(int(o.amount_paid or 0) for o in rows if pay_bucket(o) == "paid")
-    partial_rev = sum(int(o.amount_paid or 0) for o in rows if pay_bucket(o) == "partial")
+    partial_rev = sum(
+        int(o.amount_paid or 0) for o in rows if pay_bucket(o) == "partial"
+    )
 
     order_count = len(rows)
     aov = int(total_revenue / order_count) if order_count else 0
@@ -121,7 +133,10 @@ def build_report_summary(
         prod_qty[name] += int(o.quantity or 1)
         prod_rev[name] += int(o.amount_paid or 0)
     bestsellers = sorted(
-        [{"product": n, "units_sold": prod_qty[n], "revenue": prod_rev[n]} for n in prod_qty],
+        [
+            {"product": n, "units_sold": prod_qty[n], "revenue": prod_rev[n]}
+            for n in prod_qty
+        ],
         key=lambda x: x["units_sold"],
         reverse=True,
     )[:8]
@@ -134,10 +149,18 @@ def build_report_summary(
     top_ids = sorted(cust_rev.keys(), key=lambda i: cust_rev[i], reverse=True)[:8]
     id_to_name: dict[int, str] = {}
     if top_ids:
-        crows = db.query(Customer.id, Customer.name).filter(Customer.user_id == user_id, Customer.id.in_(top_ids)).all()
+        crows = (
+            db.query(Customer.id, Customer.name)
+            .filter(Customer.user_id == user_id, Customer.id.in_(top_ids))
+            .all()
+        )
         id_to_name = {int(cid): nm for cid, nm in crows}
     top_customers = [
-        {"customer_id": cid, "name": id_to_name.get(cid, f"#{cid}"), "revenue": cust_rev[cid]}
+        {
+            "customer_id": cid,
+            "name": id_to_name.get(cid, f"#{cid}"),
+            "revenue": cust_rev[cid],
+        }
         for cid in top_ids
     ]
 
@@ -150,9 +173,19 @@ def build_report_summary(
     )
     low_stock_items = [{"name": n, "quantity": int(q or 0)} for n, q, _ in lows]
 
-    delivery_rows = [o for o in rows if (getattr(o, "fulfillment_type", None) or "delivery").lower() == "delivery"]
-    deliv_completed = sum(1 for o in delivery_rows if (o.status or "").lower() in {"delivered", "paid"})
-    delivery_success_rate = round(100.0 * deliv_completed / len(delivery_rows), 1) if delivery_rows else None
+    delivery_rows = [
+        o
+        for o in rows
+        if (getattr(o, "fulfillment_type", None) or "delivery").lower() == "delivery"
+    ]
+    deliv_completed = sum(
+        1 for o in delivery_rows if (o.status or "").lower() in {"delivered", "paid"}
+    )
+    delivery_success_rate = (
+        round(100.0 * deliv_completed / len(delivery_rows), 1)
+        if delivery_rows
+        else None
+    )
 
     growth_series = []
     for i in range(5, -1, -1):
@@ -171,7 +204,12 @@ def build_report_summary(
         end_m = datetime(ny, nm, 1)
         cnt = int(
             db.query(func.count(Customer.id))
-            .filter(Customer.user_id == user_id, Customer.created_at.isnot(None), Customer.created_at >= start_m, Customer.created_at < end_m)
+            .filter(
+                Customer.user_id == user_id,
+                Customer.created_at.isnot(None),
+                Customer.created_at >= start_m,
+                Customer.created_at < end_m,
+            )
             .scalar()
             or 0
         )

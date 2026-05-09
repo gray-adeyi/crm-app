@@ -1,8 +1,12 @@
 import json
 from datetime import datetime
 
-from app.models.entities import BillingTransaction, PaymentEvent, User
-from app.services.billing import add_billing_history, mark_payment_failed, sync_subscription_row
+from app.models import BillingTransaction, PaymentEvent, User
+from app.services.billing import (
+    add_billing_history,
+    mark_payment_failed,
+    sync_subscription_row,
+)
 from app.services.billing_service import apply_successful_payment
 
 
@@ -22,7 +26,15 @@ def _already_processed(db, event_type: str, reference: str | None) -> bool:
     return row is not None
 
 
-def record_event(db, *, provider: str, event_type: str, reference: str | None, raw_body: str, payload: dict) -> PaymentEvent:
+def record_event(
+    db,
+    *,
+    provider: str,
+    event_type: str,
+    reference: str | None,
+    raw_body: str,
+    payload: dict,
+) -> PaymentEvent:
     row = PaymentEvent(
         provider=provider,
         event_type=event_type,
@@ -56,12 +68,20 @@ def process_paystack_event(db, payload: dict, raw_body: str) -> PaymentEvent:
         db.commit()
         return event_row
 
-    if event_type in {"charge.success", "subscription.create", "invoice.payment_success"}:
+    if event_type in {
+        "charge.success",
+        "subscription.create",
+        "invoice.payment_success",
+    }:
         metadata = data.get("metadata") or {}
         user_id = metadata.get("user_id")
         plan_id = metadata.get("plan_id")
         if not user_id:
-            tx = db.query(BillingTransaction).filter(BillingTransaction.reference == reference).first()
+            tx = (
+                db.query(BillingTransaction)
+                .filter(BillingTransaction.reference == reference)
+                .first()
+            )
             user_id = tx.user_id if tx else None
             plan_id = plan_id or (tx.plan_id if tx else None)
 
@@ -78,7 +98,11 @@ def process_paystack_event(db, payload: dict, raw_body: str) -> PaymentEvent:
                 )
 
     elif event_type in {"charge.failed", "invoice.payment_failed"}:
-        tx = db.query(BillingTransaction).filter(BillingTransaction.reference == reference).first()
+        tx = (
+            db.query(BillingTransaction)
+            .filter(BillingTransaction.reference == reference)
+            .first()
+        )
         if tx:
             tx.status = "failed"
             user = db.query(User).filter(User.id == tx.user_id).first()
@@ -99,7 +123,11 @@ def process_paystack_event(db, payload: dict, raw_body: str) -> PaymentEvent:
         customer = data.get("customer") or {}
         customer_code = customer.get("customer_code")
         if customer_code:
-            user = db.query(User).filter(User.paystack_customer_code == customer_code).first()
+            user = (
+                db.query(User)
+                .filter(User.paystack_customer_code == customer_code)
+                .first()
+            )
             if user:
                 user.subscription_status = "cancelled"
                 sync_subscription_row(db, user)

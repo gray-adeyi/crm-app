@@ -1,31 +1,41 @@
-from sqlalchemy import create_engine, event as sa_event
-from sqlalchemy.orm import declarative_base, sessionmaker
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
-from app.core.config import get_settings
+from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.orm import sessionmaker
 
-settings = get_settings()
+from app.core.config import settings
+from app.includes.models import BaseDBModel
 
-connect_args = {"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {}
+production_database_engine = AsyncEngine(create_engine(str(settings.DATABASE_URI)))
 
-engine = create_engine(settings.DATABASE_URL, connect_args=connect_args)
-
-if settings.DATABASE_URL.startswith("sqlite"):
-
-    @sa_event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_connection, _conn_record):  # noqa: ANN001
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
+DEVELOPMENT_DATABASE_URL = "sqlite:///testing.db"
 
 
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+async def initialize_database() -> None:
+    """Creates all the tables in the database."""
+    async with production_database_engine.begin() as conn:
+        # await conn.run_sync(SQLModel.metadata.drop_all)
+        await conn.run_sync(BaseDBModel.metadata.create_all)
 
-Base = declarative_base()
+
+async def get_db_session() -> AsyncGenerator[AsyncSession]:
+    """Provides a database session"""
+    async_session = sessionmaker(  # type: ignore
+        production_database_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with async_session() as session:
+        try:
+            yield session
+        except:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+@asynccontextmanager
+async def get_db_session_ctx():
+    async for session in get_db_session():
+        yield session

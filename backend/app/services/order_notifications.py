@@ -3,7 +3,7 @@ import logging
 from sqlalchemy.orm import joinedload
 
 from app.core.database import SessionLocal
-from app.models.entities import Notification, Order, User
+from app.models import Notification, Order, User
 from app.services.email_service import send_email
 from app.services.email_templates import build_order_created_email_html
 from app.services.notification_prefs import is_email_enabled
@@ -40,7 +40,11 @@ def enqueue_order_created_notifications(order_id: int, user_id: int) -> None:
         else:
             subject = "New order — delivery"
 
-        window_label = "Pickup" if fulfillment.lower() == "pickup" else f"Delivery {_delivery_label(order)}"
+        window_label = (
+            "Pickup"
+            if fulfillment.lower() == "pickup"
+            else f"Delivery {_delivery_label(order)}"
+        )
         db.add(
             Notification(
                 user_id=user_id,
@@ -77,7 +81,9 @@ def enqueue_order_created_notifications(order_id: int, user_id: int) -> None:
             db.commit()
         except Exception:
             db.rollback()
-            logger.exception("Order email failed (order_id=%s user_id=%s)", order_id, user_id)
+            logger.exception(
+                "Order email failed (order_id=%s user_id=%s)", order_id, user_id
+            )
             try:
                 order.reminder_status = "failed"
                 db.commit()
@@ -101,8 +107,9 @@ def _delivery_label(order: Order) -> str:
     if not order.delivery_date and not order.delivery_time:
         return "unscheduled"
     if order.delivery_date and order.delivery_time:
-        return f"{order.delivery_date.isoformat()} {order.delivery_time.strftime('%H:%M')}"
+        return (
+            f"{order.delivery_date.isoformat()} {order.delivery_time.strftime('%H:%M')}"
+        )
     if order.delivery_date:
         return order.delivery_date.isoformat()
     return order.delivery_time.strftime("%H:%M")
-

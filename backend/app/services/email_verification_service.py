@@ -6,17 +6,19 @@ import hashlib
 import hmac
 import secrets
 import string
-from datetime import datetime, timedelta
+from datetime import timedelta
+from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
-from app.models.entities import EmailVerificationToken, User
+from app.core.config import settings
+from app.core.utils import aware_datetime_now
+from app.models import EmailVerificationToken, User
 
 
 def _otp_digest(otp_plain: str) -> str:
-    settings = get_settings()
     pepper = (settings.JWT_SECRET_KEY + ":vendora-otp:v1").encode("utf-8")
     body = otp_plain.strip().encode("utf-8")
     return hmac.new(pepper, body, hashlib.sha256).hexdigest()
@@ -34,49 +36,63 @@ def generate_numeric_otp(digits: int = 6) -> str:
     return "".join(secrets.choice(string.digits) for _ in range(int(digits)))
 
 
-def deactivate_unconsumed_tokens(db: Session, *, email: str) -> None:
+async def deactivate_unconsumed_tokens(db: AsyncSession, *, email: str) -> None:
     em = _norm_email(email)
-    now = datetime.utcnow()
-    db.query(EmailVerificationToken).filter(
-        EmailVerificationToken.email == em,
-        EmailVerificationToken.consumed_at.is_(None),
-    ).update({"consumed_at": now}, synchronize_session=False)
-
-
-def latest_any_token(db: Session, *, email: str) -> EmailVerificationToken | None:
-    em = _norm_email(email)
-    return (
-        db.query(EmailVerificationToken)
-        .filter(EmailVerificationToken.email == em)
-        .order_by(EmailVerificationToken.id.desc())
-        .first()
+    now = aware_datetime_now()
+    stmt = (
+        update(EmailVerificationToken)
+        .where(
+            EmailVerificationToken.email == em,
+            EmailVerificationToken.consumed_at.is_(None),
+        )
+        .values(consumed_at=now, synchronize_session=False)
     )
+    await db.execute(stmt)
 
 
-def latest_verifiable_token(db: Session, *, email: str) -> EmailVerificationToken | None:
+async def latest_any_token(
+    db: AsyncSession, *, email: str
+) -> EmailVerificationToken | None:
     em = _norm_email(email)
-    now = datetime.utcnow()
-    return (
-        db.query(EmailVerificationToken)
-        .filter(
+    stmt = (
+        select(EmailVerificationToken)
+        .where(EmailVerificationToken.email == em)
+        .order_by(EmailVerificationToken.id.desc())
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def latest_verifiable_token(
+    db: AsyncSession, *, email: str
+) -> EmailVerificationToken | None:
+    em = _norm_email(email)
+    now = aware_datetime_now()
+    stmt = (
+        select(EmailVerificationToken)
+        .where(
             EmailVerificationToken.email == em,
             EmailVerificationToken.consumed_at.is_(None),
             EmailVerificationToken.expires_at >= now,
         )
-        .order_by(EmailVerificationToken.id.desc())
-        .first()
+        .order_by(EmailVerificationToken.created_at.desc())
     )
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
-def issue_email_verification_token(db: Session, *, user_id: int, email: str, force_new: bool = False) -> str:
-    settings = get_settings()
-    now = datetime.utcnow()
+async def issue_email_verification_token(
+    db: AsyncSession, *, user_id: UUID, email: str, force_new: bool = False
+) -> str:
+    now = aware_datetime_now()
     em = _norm_email(email)
 
     if not force_new:
         cooldown = timedelta(seconds=max(5, settings.OTP_RESEND_COOLDOWN_SECONDS))
-        last_any = latest_any_token(db, email=em)
-        if last_any and last_any.last_sent_at and last_any.last_sent_at + cooldown > now:
+        last_any = await latest_any_token(db, email=em)
+        if (
+            last_any
+            and last_any.last_sent_at
+            and last_any.last_sent_at + cooldown > now
+        ):
             raise HTTPException(
                 status_code=429,
                 detail={
@@ -87,7 +103,7 @@ def issue_email_verification_token(db: Session, *, user_id: int, email: str, for
             )
 
     otp_plain = generate_numeric_otp(6)
-    deactivate_unconsumed_tokens(db, email=em)
+    await deactivate_unconsumed_tokens(db, email=em)
     expires = now + timedelta(minutes=max(5, settings.OTP_EXPIRE_MINUTES))
     row = EmailVerificationToken(
         email=em,
@@ -98,28 +114,43 @@ def issue_email_verification_token(db: Session, *, user_id: int, email: str, for
         last_sent_at=now,
     )
     db.add(row)
-    db.commit()
+    await db.commit()
     return otp_plain
 
 
-def verify_email_otp(db: Session, *, email: str, otp_plain: str) -> User:
-    settings = get_settings()
-    now = datetime.utcnow()
+async def verify_email_otp(db: AsyncSession, *, email: str, otp_plain: str) -> User:
+    now = aware_datetime_now()
     em = _norm_email(email)
-    row = latest_verifiable_token(db, email=em)
+    row = await latest_verifiable_token(db, email=em)
     if not row:
-        raise HTTPException(status_code=400, detail={"code": "OTP_INVALID", "message": "No active verification code. Request a new one."})
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "OTP_INVALID",
+                "message": "No active verification code. Request a new one.",
+            },
+        )
 
     if int(row.failed_attempts or 0) >= settings.OTP_MAX_ATTEMPTS:
-        raise HTTPException(status_code=429, detail={"code": "OTP_LOCKED", "message": "Too many attempts. Request a new code."})
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "OTP_LOCKED",
+                "message": "Too many attempts. Request a new code.",
+            },
+        )
 
     if not _otp_matches(otp_plain.strip(), row.otp_hash):
         row.failed_attempts = int(row.failed_attempts or 0) + 1
         db.add(row)
-        db.commit()
-        raise HTTPException(status_code=400, detail={"code": "OTP_INVALID", "message": "Incorrect verification code."})
+        await db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "OTP_INVALID", "message": "Incorrect verification code."},
+        )
 
-    user = db.query(User).filter(User.id == row.user_id).first()
+    stmt = select(User).where(User.id == row.user_id)
+    user = (await db.execute(stmt)).scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=400, detail="User not found")
 
@@ -127,6 +158,6 @@ def verify_email_otp(db: Session, *, email: str, otp_plain: str) -> User:
     row.consumed_at = now
     db.add(user)
     db.add(row)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     return user

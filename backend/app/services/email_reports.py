@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime
 
-from app.core.config import get_settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,12 @@ def build_monthly_report_html(
 
 
 def send_monthly_report_stub(to_email: str, html: str) -> bool:
-    settings = get_settings()
     if not settings.SMTP_HOST:
-        logger.info("SMTP not configured — report for %s generated at %s", to_email, datetime.utcnow().isoformat())
+        logger.info(
+            "SMTP not configured — report for %s generated at %s",
+            to_email,
+            datetime.utcnow().isoformat(),
+        )
         return False
     logger.info("Would send email to %s (%d bytes)", to_email, len(html))
     return True

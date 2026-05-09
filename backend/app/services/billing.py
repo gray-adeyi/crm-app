@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.core.config import get_settings
-from app.models.entities import BillingHistory, Subscription
+from app.core.config import settings
+from app.models import BillingHistory, Subscription
 
 SUBSCRIPTION_PLANS: dict[str, dict[str, Any]] = {
     "starter": {
@@ -11,8 +11,16 @@ SUBSCRIPTION_PLANS: dict[str, dict[str, Any]] = {
         "price_ngn": 15000,
         "interval": "monthly",
         "max_customers": 50,
-        "features": ["Up to 50 customers", "Basic tracking", "Limited analytics dashboard"],
-        "gates": {"inventory_writes": True, "advanced_exports": False, "multi_user": False},
+        "features": [
+            "Up to 50 customers",
+            "Basic tracking",
+            "Limited analytics dashboard",
+        ],
+        "gates": {
+            "inventory_writes": True,
+            "advanced_exports": False,
+            "multi_user": False,
+        },
     },
     "growth": {
         "id": "growth",
@@ -20,8 +28,17 @@ SUBSCRIPTION_PLANS: dict[str, dict[str, Any]] = {
         "price_ngn": 50000,
         "interval": "monthly",
         "max_customers": None,
-        "features": ["Unlimited customers", "Payment tracking", "Analytics", "Inventory system"],
-        "gates": {"inventory_writes": True, "advanced_exports": False, "multi_user": False},
+        "features": [
+            "Unlimited customers",
+            "Payment tracking",
+            "Analytics",
+            "Inventory system",
+        ],
+        "gates": {
+            "inventory_writes": True,
+            "advanced_exports": False,
+            "multi_user": False,
+        },
     },
     "enterprise": {
         "id": "enterprise",
@@ -29,8 +46,18 @@ SUBSCRIPTION_PLANS: dict[str, dict[str, Any]] = {
         "price_ngn": 100000,
         "interval": "monthly",
         "max_customers": None,
-        "features": ["Multi-user access", "Advanced analytics", "Automated receipts", "Priority support", "Advanced exports"],
-        "gates": {"inventory_writes": True, "advanced_exports": True, "multi_user": True},
+        "features": [
+            "Multi-user access",
+            "Advanced analytics",
+            "Automated receipts",
+            "Priority support",
+            "Advanced exports",
+        ],
+        "gates": {
+            "inventory_writes": True,
+            "advanced_exports": True,
+            "multi_user": True,
+        },
     },
 }
 
@@ -66,7 +93,13 @@ def next_renewal_date(from_date: datetime | None = None) -> datetime:
     return base + timedelta(days=30)
 
 
-def activate_plan_on_user(user, plan_id: str, *, reference: str | None = None, customer_code: str | None = None) -> None:
+def activate_plan_on_user(
+    user,
+    plan_id: str,
+    *,
+    reference: str | None = None,
+    customer_code: str | None = None,
+) -> None:
     nid = normalize_plan_id(plan_id)
     if nid not in SUBSCRIPTION_PLANS:
         nid = "starter"
@@ -87,9 +120,18 @@ def activate_plan_on_user(user, plan_id: str, *, reference: str | None = None, c
 
 
 def sync_subscription_row(db, user) -> Subscription:
-    row = db.query(Subscription).filter(Subscription.user_id == user.id).order_by(Subscription.id.desc()).first()
+    row = (
+        db.query(Subscription)
+        .filter(Subscription.user_id == user.id)
+        .order_by(Subscription.id.desc())
+        .first()
+    )
     if not row:
-        row = Subscription(user_id=user.id, plan_id=user.current_plan or user.subscription_plan, status=user.subscription_status)
+        row = Subscription(
+            user_id=user.id,
+            plan_id=user.current_plan or user.subscription_plan,
+            status=user.subscription_status,
+        )
         db.add(row)
     row.plan_id = user.current_plan or user.subscription_plan
     row.status = user.subscription_status
@@ -102,7 +144,6 @@ def sync_subscription_row(db, user) -> Subscription:
 
 
 def mark_payment_failed(user) -> None:
-    settings = get_settings()
     now = _now()
     user.subscription_status = "overdue"
     user.subscription_grace_until = now + timedelta(days=settings.BILLING_GRACE_DAYS)
@@ -121,7 +162,17 @@ def reactivate_subscription(user) -> None:
         user.subscription_ends_at = user.renewal_date
 
 
-def add_billing_history(db, *, user_id: int, action: str, status: str, from_plan: str | None, to_plan: str | None, reference: str | None, note: str | None = None) -> BillingHistory:
+def add_billing_history(
+    db,
+    *,
+    user_id: int,
+    action: str,
+    status: str,
+    from_plan: str | None,
+    to_plan: str | None,
+    reference: str | None,
+    note: str | None = None,
+) -> BillingHistory:
     row = BillingHistory(
         user_id=user_id,
         action=action,

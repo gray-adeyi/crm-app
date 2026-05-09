@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
-from app.api.deps import DbSession, SaasUser
-from app.models.entities import Order, Product
+from app.api.deps import AsyncDBSession, SaasUser
+from app.models import Order, Product
 from app.schemas.order import OrderCreate, OrderResponse, OrderUpdate
 from app.services.activity_logging import log_transaction_event, log_user_activity
 from app.services.order_logic import compute_balance, compute_order_status
@@ -11,9 +11,13 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 
 
 def _get_owned_customer_or_404(db, customer_id: int, user_id: int):
-    from app.models.entities import Customer
+    from app.models import Customer
 
-    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.user_id == user_id).first()
+    customer = (
+        db.query(Customer)
+        .filter(Customer.id == customer_id, Customer.user_id == user_id)
+        .first()
+    )
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     return customer
@@ -23,22 +27,32 @@ def _normalize_amounts(total_price: int, amount_paid: int) -> tuple[int, int]:
     if amount_paid < 0:
         raise HTTPException(status_code=400, detail="amount_paid cannot be negative")
     if amount_paid > total_price:
-        raise HTTPException(status_code=400, detail="amount_paid cannot exceed total_price")
+        raise HTTPException(
+            status_code=400, detail="amount_paid cannot exceed total_price"
+        )
     return int(total_price), int(amount_paid)
 
 
 def _get_owned_product_or_404(db, product_id: int, user_id: int) -> Product:
-    product = db.query(Product).filter(Product.id == product_id, Product.user_id == user_id).first()
+    product = (
+        db.query(Product)
+        .filter(Product.id == product_id, Product.user_id == user_id)
+        .first()
+    )
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     return product
 
 
-def _deduct_stock_or_400(db, *, product: Product, qty: int, user_id: int, order_id: int) -> None:
+def _deduct_stock_or_400(
+    db, *, product: Product, qty: int, user_id: int, order_id: int
+) -> None:
     if qty <= 0:
         raise HTTPException(status_code=400, detail="quantity must be >= 1")
     if int(product.quantity_in_stock or 0) < int(qty):
-        raise HTTPException(status_code=400, detail=f"Insufficient stock for {product.name}")
+        raise HTTPException(
+            status_code=400, detail=f"Insufficient stock for {product.name}"
+        )
     product.quantity_in_stock = int(product.quantity_in_stock or 0) - int(qty)
     from app.models.entities import InventoryMovement
 
@@ -55,7 +69,12 @@ def _deduct_stock_or_400(db, *, product: Product, qty: int, user_id: int, order_
 
 
 @router.post("", response_model=OrderResponse)
-def create_order(order: OrderCreate, db: DbSession, user: SaasUser, background_tasks: BackgroundTasks):
+async def create_order(
+    order: OrderCreate,
+    db: AsyncDBSession,
+    user: SaasUser,
+    background_tasks: BackgroundTasks,
+):
     assert_permission(user, "orders:write")
     _get_owned_customer_or_404(db, order.customer_id, user.id)
 
@@ -73,7 +92,11 @@ def create_order(order: OrderCreate, db: DbSession, user: SaasUser, background_t
     ft = (order.fulfillment_type or "delivery").lower()
     delivery_date = order.delivery_date if ft == "delivery" else None
     delivery_time = order.delivery_time if ft == "delivery" else None
-    delivery_address = (order.delivery_address.strip() if order.delivery_address else None) if ft == "delivery" else None
+    delivery_address = (
+        (order.delivery_address.strip() if order.delivery_address else None)
+        if ft == "delivery"
+        else None
+    )
 
     row = Order(
         product=product_name,
@@ -89,7 +112,9 @@ def create_order(order: OrderCreate, db: DbSession, user: SaasUser, background_t
         delivery_date=delivery_date,
         delivery_time=delivery_time,
         delivery_address=delivery_address,
-        delivery_notes=(order.delivery_notes.strip() if order.delivery_notes else None) if ft == "delivery" else None,
+        delivery_notes=(order.delivery_notes.strip() if order.delivery_notes else None)
+        if ft == "delivery"
+        else None,
         notes=(order.notes.strip() if order.notes else None),
         payment_method=(order.payment_method.strip() if order.payment_method else None),
     )
@@ -97,7 +122,13 @@ def create_order(order: OrderCreate, db: DbSession, user: SaasUser, background_t
         db.add(row)
         db.flush()  # allocate row.id for movement link
         if product_row and not row.stock_deducted:
-            _deduct_stock_or_400(db, product=product_row, qty=row.quantity, user_id=user.id, order_id=row.id)
+            _deduct_stock_or_400(
+                db,
+                product=product_row,
+                qty=row.quantity,
+                user_id=user.id,
+                order_id=row.id,
+            )
             row.stock_deducted = True
             try:
                 from app.services.inventory_alerts import refresh_product_stock_flags
@@ -119,7 +150,11 @@ def create_order(order: OrderCreate, db: DbSession, user: SaasUser, background_t
             user_id=user.id,
             category="order",
             summary=f"Order #{row.id} created",
-            payload={"order_id": row.id, "amount_paid": amount_paid, "total": total_price},
+            payload={
+                "order_id": row.id,
+                "amount_paid": amount_paid,
+                "total": total_price,
+            },
         )
         db.commit()
         db.refresh(row)
@@ -138,33 +173,48 @@ def create_order(order: OrderCreate, db: DbSession, user: SaasUser, background_t
 
     try:
         if product_row:
-            from app.services.inventory_alerts import enqueue_low_stock_alert, is_low_stock
+            from app.services.inventory_alerts import (
+                enqueue_low_stock_alert,
+                is_low_stock,
+            )
 
             if is_low_stock(product_row):
-                background_tasks.add_task(enqueue_low_stock_alert, product_row.id, user.id)
+                background_tasks.add_task(
+                    enqueue_low_stock_alert, product_row.id, user.id
+                )
     except Exception:
         pass
     return row
 
 
 @router.get("", response_model=list[OrderResponse])
-def list_orders(db: DbSession, user: SaasUser):
+async def list_orders(db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "orders:read")
-    return db.query(Order).filter(Order.user_id == user.id).order_by(Order.id.desc()).all()
+    return (
+        db.query(Order).filter(Order.user_id == user.id).order_by(Order.id.desc()).all()
+    )
 
 
 @router.put("/{order_id}", response_model=OrderResponse)
-def update_order(order_id: int, payload: OrderUpdate, db: DbSession, user: SaasUser):
+async def update_order(
+    order_id: int, payload: OrderUpdate, db: AsyncDBSession, user: SaasUser
+):
     assert_permission(user, "orders:write")
-    existing = db.query(Order).filter(Order.id == order_id, Order.user_id == user.id).first()
+    existing = (
+        db.query(Order).filter(Order.id == order_id, Order.user_id == user.id).first()
+    )
     if not existing:
         raise HTTPException(status_code=404, detail="Order not found")
 
     _get_owned_customer_or_404(db, payload.customer_id, user.id)
 
-    total_price, amount_paid = _normalize_amounts(payload.total_price, payload.amount_paid)
+    total_price, amount_paid = _normalize_amounts(
+        payload.total_price, payload.amount_paid
+    )
     balance = compute_balance(total_price, amount_paid)
-    normalized_status = compute_order_status(total_price, amount_paid, payload.status.strip().lower())
+    normalized_status = compute_order_status(
+        total_price, amount_paid, payload.status.strip().lower()
+    )
 
     new_product_id = payload.product_id
     new_product_name = (payload.product.strip() if payload.product else None) or ""
@@ -174,13 +224,25 @@ def update_order(order_id: int, payload: OrderUpdate, db: DbSession, user: SaasU
         new_product_name = product_row.name
 
     # stock adjustment (best-effort)
-    if existing.product_id and existing.stock_deducted and existing.product_id == new_product_id:
+    if (
+        existing.product_id
+        and existing.stock_deducted
+        and existing.product_id == new_product_id
+    ):
         delta_qty = int(payload.quantity) - int(existing.quantity or 1)
         if delta_qty != 0 and product_row:
             if delta_qty > 0:
-                _deduct_stock_or_400(db, product=product_row, qty=delta_qty, user_id=user.id, order_id=existing.id)
+                _deduct_stock_or_400(
+                    db,
+                    product=product_row,
+                    qty=delta_qty,
+                    user_id=user.id,
+                    order_id=existing.id,
+                )
             else:
-                product_row.quantity_in_stock = int(product_row.quantity_in_stock or 0) + abs(int(delta_qty))
+                product_row.quantity_in_stock = int(
+                    product_row.quantity_in_stock or 0
+                ) + abs(int(delta_qty))
                 from app.models.entities import InventoryMovement
 
                 db.add(
@@ -196,7 +258,10 @@ def update_order(order_id: int, payload: OrderUpdate, db: DbSession, user: SaasU
     elif existing.product_id != new_product_id:
         # changing product on an already-deducted order is complex; block to prevent double-deduction bugs
         if existing.stock_deducted:
-            raise HTTPException(status_code=400, detail="Cannot change product for an order that already affected stock")
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot change product for an order that already affected stock",
+            )
 
     ft = (payload.fulfillment_type or "delivery").lower()
     existing.product = new_product_name
@@ -210,10 +275,20 @@ def update_order(order_id: int, payload: OrderUpdate, db: DbSession, user: SaasU
     existing.fulfillment_type = ft
     existing.delivery_date = payload.delivery_date if ft == "delivery" else None
     existing.delivery_time = payload.delivery_time if ft == "delivery" else None
-    existing.delivery_address = (payload.delivery_address.strip() if payload.delivery_address else None) if ft == "delivery" else None
-    existing.delivery_notes = (payload.delivery_notes.strip() if payload.delivery_notes else None) if ft == "delivery" else None
+    existing.delivery_address = (
+        (payload.delivery_address.strip() if payload.delivery_address else None)
+        if ft == "delivery"
+        else None
+    )
+    existing.delivery_notes = (
+        (payload.delivery_notes.strip() if payload.delivery_notes else None)
+        if ft == "delivery"
+        else None
+    )
     existing.notes = payload.notes.strip() if payload.notes else None
-    existing.payment_method = payload.payment_method.strip() if payload.payment_method else None
+    existing.payment_method = (
+        payload.payment_method.strip() if payload.payment_method else None
+    )
 
     if product_row:
         try:
@@ -246,9 +321,11 @@ def update_order(order_id: int, payload: OrderUpdate, db: DbSession, user: SaasU
 
 
 @router.delete("/{order_id}")
-def delete_order(order_id: int, db: DbSession, user: SaasUser):
+async def delete_order(order_id: int, db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "orders:delete")
-    existing = db.query(Order).filter(Order.id == order_id, Order.user_id == user.id).first()
+    existing = (
+        db.query(Order).filter(Order.id == order_id, Order.user_id == user.id).first()
+    )
     if not existing:
         raise HTTPException(status_code=404, detail="Order not found")
     oid = existing.id

@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from app.core.config import get_settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,6 @@ def _build_message(
     text: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
 ) -> EmailMessage:
-    settings = get_settings()
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = settings.SMTP_FROM
@@ -33,7 +32,9 @@ def _build_message(
         for att in attachments:
             data = att.get("content") or b""
             fn = att.get("filename") or "attachment.bin"
-            subtype = (att.get("content_type") or "application/octet-stream").split("/")[-1]
+            subtype = (att.get("content_type") or "application/octet-stream").split(
+                "/"
+            )[-1]
             main = (att.get("content_type") or "application/octet-stream").split("/")[0]
             msg.add_attachment(data, maintype=main, subtype=subtype, filename=fn)
     return msg
@@ -47,14 +48,16 @@ def _send_sendgrid_sync(
     text: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
 ) -> None:
-    settings = get_settings()
     content: list[dict[str, str]] = []
     if text:
         content.append({"type": "text/plain", "value": text})
     content.append({"type": "text/html", "value": html})
     body: dict[str, Any] = {
         "personalizations": [{"to": [{"email": to_email}]}],
-        "from": {"email": settings.SENDGRID_FROM_EMAIL.strip(), "name": settings.SENDGRID_FROM_NAME.strip() or "Vendora"},
+        "from": {
+            "email": settings.SENDGRID_FROM_EMAIL.strip(),
+            "name": settings.SENDGRID_FROM_NAME.strip() or "Vendora",
+        },
         "subject": subject,
         "content": content,
     }
@@ -70,7 +73,10 @@ def _send_sendgrid_sync(
         ]
     resp = httpx.post(
         "https://api.sendgrid.com/v3/mail/send",
-        headers={"Authorization": f"Bearer {settings.SENDGRID_API_KEY}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {settings.SENDGRID_API_KEY}",
+            "Content-Type": "application/json",
+        },
         json=body,
         timeout=40.0,
     )
@@ -87,8 +93,9 @@ def _send_mailgun_sync(
     text: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
 ) -> None:
-    settings = get_settings()
-    url = f"{settings.MAILGUN_API_BASE.rstrip('/')}/v3/{settings.MAILGUN_DOMAIN}/messages"
+    url = (
+        f"{settings.MAILGUN_API_BASE.rstrip('/')}/v3/{settings.MAILGUN_DOMAIN}/messages"
+    )
     data = {
         "from": settings.MAILGUN_FROM,
         "to": to_email,
@@ -123,7 +130,6 @@ def _send_resend_sync(
     text: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
 ) -> None:
-    settings = get_settings()
     payload: dict[str, Any] = {
         "from": settings.RESEND_FROM,
         "to": [to_email],
@@ -142,7 +148,10 @@ def _send_resend_sync(
         ]
     resp = httpx.post(
         "https://api.resend.com/emails",
-        headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {settings.RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
         json=payload,
         timeout=40.0,
     )
@@ -159,28 +168,52 @@ def _send_sync(
     text: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
 ) -> None:
-    settings = get_settings()
     if settings.RESEND_API_KEY:
-        _send_resend_sync(subject=subject, to_email=to_email, html=html, text=text, attachments=attachments)
+        _send_resend_sync(
+            subject=subject,
+            to_email=to_email,
+            html=html,
+            text=text,
+            attachments=attachments,
+        )
         return
 
     if settings.SENDGRID_API_KEY:
-        _send_sendgrid_sync(subject=subject, to_email=to_email, html=html, text=text, attachments=attachments)
+        _send_sendgrid_sync(
+            subject=subject,
+            to_email=to_email,
+            html=html,
+            text=text,
+            attachments=attachments,
+        )
         return
 
     if settings.MAILGUN_API_KEY and settings.MAILGUN_DOMAIN and settings.MAILGUN_FROM:
-        _send_mailgun_sync(subject=subject, to_email=to_email, html=html, text=text, attachments=attachments)
+        _send_mailgun_sync(
+            subject=subject,
+            to_email=to_email,
+            html=html,
+            text=text,
+            attachments=attachments,
+        )
         return
 
     if not settings.SMTP_HOST:
         logger.info(
-            "No email provider configured (set RESEND_API_KEY, SENDGRID_API_KEY, Mailgun, or SMTP_HOST) — skipping send (subject=%s, to=%s)",
+            "No email provider configured (set RESEND_API_KEY, SENDGRID_API_KEY, "
+            "Mailgun, or SMTP_HOST) — skipping send (subject=%s, to=%s)",
             subject,
             to_email,
         )
         return
 
-    msg = _build_message(subject=subject, to_email=to_email, html=html, text=text, attachments=attachments)
+    msg = _build_message(
+        subject=subject,
+        to_email=to_email,
+        html=html,
+        text=text,
+        attachments=attachments,
+    )
 
     try:
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=20) as server:
@@ -189,7 +222,9 @@ def _send_sync(
                 server.starttls()
                 server.ehlo()
             except Exception:
-                logger.debug("SMTP STARTTLS not supported or failed; continuing without TLS")
+                logger.debug(
+                    "SMTP STARTTLS not supported or failed; continuing without TLS"
+                )
 
             if settings.SMTP_USER:
                 server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
@@ -214,5 +249,11 @@ async def send_email(
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(
         _executor,
-        lambda: _send_sync(subject=subject, to_email=to_email, html=html, text=text, attachments=attachments),
+        lambda: _send_sync(
+            subject=subject,
+            to_email=to_email,
+            html=html,
+            text=text,
+            attachments=attachments,
+        ),
     )

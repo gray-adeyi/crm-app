@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.entities import TransactionLog, UserActivityLog
+from app.models import TransactionLog, UserActivityLog
 
 
 def log_user_activity(
