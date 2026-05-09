@@ -35,7 +35,9 @@ class OrderCreate(BaseModel):
         self.fulfillment_type = ft
         if ft == "delivery":
             if not self.delivery_date or not self.delivery_time:
-                raise ValueError("Delivery date and time are required for delivery orders")
+                raise ValueError(
+                    "Delivery date and time are required for delivery orders"
+                )
         return self
 
 
@@ -72,7 +74,9 @@ class OrderUpdate(BaseModel):
         self.fulfillment_type = ft
         if ft == "delivery":
             if not self.delivery_date or not self.delivery_time:
-                raise ValueError("Delivery date and time are required for delivery orders")
+                raise ValueError(
+                    "Delivery date and time are required for delivery orders"
+                )
         return self
 
 

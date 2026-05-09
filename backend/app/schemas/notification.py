@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models.entities import Notification
+from app.models import Notification
 
 
 def _derive_category(typ: str) -> str:

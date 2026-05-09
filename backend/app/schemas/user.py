@@ -3,9 +3,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
-from app.models.entities import User
+from app.models import User
 from app.services import plan_entitlements
-from app.services.notification_prefs import prefs_dict, serialize_prefs
+from app.services.notification_prefs import prefs_dict
 
 
 class MeResponse(BaseModel):
