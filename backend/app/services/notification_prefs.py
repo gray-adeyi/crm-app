@@ -1,8 +1,12 @@
-"""Per-user notification channel toggles stored as JSON on `User.notification_preferences`."""
+"""
+Per-user notification channel toggles stored as JSON on `User.notification_preferences`.
+"""
 
 from __future__ import annotations
 
 import json
+
+from app.models.users import User
 
 _DEFAULT = {
     "email_order_reminders": True,
@@ -13,7 +17,7 @@ _DEFAULT = {
 }
 
 
-def prefs_dict(user) -> dict:
+def prefs_dict(user: User) -> dict:
     raw = getattr(user, "notification_preferences", None)
     if not raw:
         return dict(_DEFAULT)
@@ -28,7 +32,7 @@ def prefs_dict(user) -> dict:
     return dict(_DEFAULT)
 
 
-def is_email_enabled(user, topic: str) -> bool:
+def is_email_enabled(user: User, topic: str) -> bool:
     """
     Topics: order_reminders | low_stock | monthly_report | activity_summary | billing
     Maps to camelCase email_* keys in stored JSON.

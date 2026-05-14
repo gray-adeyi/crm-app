@@ -1,9 +1,9 @@
 """HTML email monthly summaries — requires SMTP env to actually send."""
 
 import logging
-from datetime import datetime
 
 from app.core.config import settings
+from app.core.utils import aware_datetime_now
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def send_monthly_report_stub(to_email: str, html: str) -> bool:
         logger.info(
             "SMTP not configured — report for %s generated at %s",
             to_email,
-            datetime.utcnow().isoformat(),
+            aware_datetime_now().isoformat(),
         )
         return False
     logger.info("Would send email to %s (%d bytes)", to_email, len(html))

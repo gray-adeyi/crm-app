@@ -1,10 +1,12 @@
 """Aggregated reports for the Reports dashboard (filterable by date range & status)."""
 
 from __future__ import annotations
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -34,14 +36,14 @@ def window_bounds(
 
 
 def build_report_summary(
-    db: Session,
+    db: AsyncSession,
     *,
-    user_id: int,
+    user_id: UUID,
     date_from: str | None,
     date_to: str | None,
     order_statuses: list[str] | None,
     payment_statuses: list[str] | None,
-    customer_id: int | None,
+    customer_id: UUID | None,
 ) -> dict[str, Any]:
     start_dt, end_exclusive = window_bounds(date_from=date_from, date_to=date_to)
 

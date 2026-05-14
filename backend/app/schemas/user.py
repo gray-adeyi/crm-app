@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
@@ -11,7 +12,7 @@ from app.services.notification_prefs import prefs_dict
 class MeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=False)
 
-    id: int
+    id: UUID
     email: str
     role: str
     subscription_plan: str

@@ -1,28 +1,31 @@
-from datetime import datetime
+from uuid import UUID
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.utils import aware_datetime_now
 from app.models import Invoice
 
 
-def build_invoice_number(user_id: int, reference: str) -> str:
-    stamp = datetime.utcnow().strftime("%Y%m%d")
+def build_invoice_number(user_id: UUID, reference: str) -> str:
+    stamp = aware_datetime_now().strftime("%Y%m%d")
     return f"INV-{stamp}-{user_id}-{reference[-6:]}"
 
 
-def create_invoice(
-    db,
+async def create_invoice(
+    db: AsyncSession,
     *,
-    user_id: int,
+    user_id: UUID,
     transaction_id: int | None,
     plan_id: str,
     amount: int,
     reference: str,
     paid: bool,
 ) -> Invoice:
-    existing = (
-        db.query(Invoice)
-        .filter(Invoice.reference == reference, Invoice.user_id == user_id)
-        .first()
+    stmt = select(Invoice).where(
+        Invoice.reference == reference, Invoice.user_id == user_id
     )
+    existing = (await db.execute(stmt)).scalar_one_or_none()
     if existing:
         return existing
 
@@ -35,7 +38,7 @@ def create_invoice(
         currency="NGN",
         reference=reference,
         status="paid" if paid else "issued",
-        paid_at=datetime.utcnow() if paid else None,
+        paid_at=aware_datetime_now() if paid else None,
     )
     db.add(row)
     return row

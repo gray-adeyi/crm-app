@@ -1,5 +1,6 @@
+from uuid import UUID
 from fastapi import APIRouter, Query
-from sqlalchemy import desc
+from sqlalchemy import desc, select
 
 from app.api.deps import AsyncDBSession, SaasUser
 from app.models import TransactionLog, UserActivityLog, VendorReportDispatch
@@ -22,20 +23,12 @@ async def vendor_logs(
     db: AsyncDBSession, user: SaasUser, limit: int = Query(default=250, ge=1, le=1000)
 ):
     assert_permission(user, "analytics:read")
-    acts = (
-        db.query(UserActivityLog)
-        .filter(UserActivityLog.user_id == user.id)
-        .order_by(desc(UserActivityLog.id))
-        .limit(limit)
-        .all()
+    stmt = (
+        select(UserActivityLog).where(UserActivityLog.user_id == user.id).limit(limit)
     )
-    txs = (
-        db.query(TransactionLog)
-        .filter(TransactionLog.user_id == user.id)
-        .order_by(desc(TransactionLog.id))
-        .limit(limit)
-        .all()
-    )
+    acts = (await db.execute(stmt)).scalars().all()
+    stmt = select(TransactionLog).where(TransactionLog.user_id == user.id).limit(limit)
+    txs = (await db.execute(stmt)).scalars().all()
     return LogsReportResponse(
         activity=[ActivityLogOut.model_validate(r) for r in acts],
         transactions=[TransactionLogOut.model_validate(r) for r in txs],
@@ -50,7 +43,7 @@ async def reports_summary(
     date_to: str | None = Query(default=None, max_length=32),
     order_status: list[str] | None = Query(default=None),
     payment_status: list[str] | None = Query(default=None),
-    customer_id: int | None = Query(default=None, ge=1),
+    customer_id: UUID | None = Query(default=None),
 ):
     assert_permission(user, "analytics:read")
     summary = build_report_summary(
@@ -68,13 +61,12 @@ async def reports_summary(
 @router.get("/monthly-dispatches", response_model=MonthlyDispatchListResponse)
 async def monthly_dispatches(db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "analytics:read")
-    rows = (
-        db.query(VendorReportDispatch)
-        .filter(VendorReportDispatch.user_id == user.id)
-        .order_by(desc(VendorReportDispatch.id))
+    stmt = (
+        select(VendorReportDispatch)
+        .where(VendorReportDispatch.user_id == user.id)
         .limit(48)
-        .all()
     )
+    rows = (await db.execute(stmt)).scalars().all()
     return MonthlyDispatchListResponse(
         items=[ReportMonthlyDispatch.model_validate(r) for r in rows]
     )

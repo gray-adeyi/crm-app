@@ -1,4 +1,6 @@
-"""Plan limits and feature gates (trial overrides for full premium during active trial)."""
+"""
+Plan limits and feature gates (trial overrides for full premium during active trial).
+"""
 
 from __future__ import annotations
 

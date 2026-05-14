@@ -1,3 +1,4 @@
+from uuid import UUID
 import logging
 import math
 from datetime import timedelta
@@ -37,8 +38,7 @@ def refresh_product_stock_flags(product: Product) -> None:
     product.is_low_stock = bool(is_low_stock(product))
 
 
-async def enqueue_low_stock_alert(product_id: int, user_id: int) -> None:
-
+async def enqueue_low_stock_alert(product_id: UUID, user_id: UUID) -> None:
     async with get_db_session_ctx() as db:
         try:
             stmt = select(User).where(User.id == user_id)
@@ -55,16 +55,12 @@ async def enqueue_low_stock_alert(product_id: int, user_id: int) -> None:
 
             # dedupe: only one low_stock notification per product per 24h
             since = aware_datetime_now() - timedelta(hours=24)
-            stmt = (
-                select(Notification)
-                .where(
-                    Notification.user_id == user_id,
-                    Notification.type == "low_stock",
-                    Notification.related_product_id == product_id,
-                    Notification.created_at.isnot(None),
-                    Notification.created_at >= since,
-                )
-                .order_by(Notification.id.desc())
+            stmt = select(Notification).where(
+                Notification.user_id == user_id,
+                Notification.type == "low_stock",
+                Notification.related_product_id == product_id,
+                Notification.created_at.isnot(None),
+                Notification.created_at >= since,
             )
             existing = (await db.execute(stmt)).scalar_one_or_none()
             if existing:

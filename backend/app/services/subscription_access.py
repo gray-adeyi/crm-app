@@ -1,6 +1,7 @@
 """Trial + paid subscription guards for SaaS route protection."""
 
 from __future__ import annotations
+from app.core.utils import aware_datetime_now
 
 from datetime import datetime
 
@@ -8,10 +9,6 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.users import User
-
-
-def utc_now_naive() -> datetime:
-    return datetime.utcnow()
 
 
 def effective_trial_end(user) -> datetime | None:
@@ -24,7 +21,7 @@ def is_trial_effective_now(user, *, now: datetime | None = None) -> bool:
     end = effective_trial_end(user)
     if not end:
         return False
-    ref = now or utc_now_naive()
+    ref = now or aware_datetime_now()
     return ref <= end
 
 
@@ -37,7 +34,7 @@ def finalize_expired_trial(db, user) -> bool:
     Mutates user row if trial just expired.
     Returns True if state changed (caller should commit if needed).
     """
-    ref = utc_now_naive()
+    ref = aware_datetime_now()
     status_s = (user.subscription_status or "").lower()
     if status_s != "trial":
         return False
@@ -58,7 +55,7 @@ async def ensure_saas_access(db: AsyncSession, user: User) -> None:
         await db.commit()
         await db.refresh(user)
 
-    ref = utc_now_naive()
+    ref = aware_datetime_now()
     raw_status = (user.subscription_status or "inactive").lower()
 
     grace = user.subscription_grace_until

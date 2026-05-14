@@ -1,3 +1,7 @@
+from app.core.utils import aware_datetime_now
+from app.models.users import User
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 
 from fastapi import HTTPException
@@ -23,22 +27,21 @@ from app.services.paystack_service import (
 )
 
 
-def _tx_by_reference(db, reference: str) -> BillingTransaction | None:
-    return (
-        db.query(BillingTransaction)
-        .filter(BillingTransaction.reference == reference)
-        .first()
-    )
+async def _tx_by_reference(
+    db: AsyncSession, reference: str
+) -> BillingTransaction | None:
+    stmt = select(BillingTransaction).where(BillingTransaction.reference == reference)
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
-def initialize_subscription_checkout(db, user, plan_id: str) -> BillingTransaction:
+async def initialize_subscription_checkout(
+    db: AsyncSession, user: User, plan_id: str
+) -> BillingTransaction:
     plan = get_plan(normalize_plan_id(plan_id))
-    if not plan:
-        raise HTTPException(status_code=400, detail="Invalid plan selected")
 
     reference = generate_reference(user.id, plan["id"])
     metadata = {
-        "user_id": user.id,
+        "user_id": str(user.id),
         "plan_id": plan["id"],
         "crm_billing": True,
     }
@@ -68,21 +71,21 @@ def initialize_subscription_checkout(db, user, plan_id: str) -> BillingTransacti
     add_billing_history(
         db,
         user_id=user.id,
-        action="subscribe",
-        status="initialized",
+        action="SUBSCRIBE",
+        status="INITIALIZED",
         from_plan=user.current_plan or user.subscription_plan,
         to_plan=plan["id"],
         reference=reference,
     )
-    db.commit()
-    db.refresh(tx)
+    await db.commit()
+    await db.refresh(tx)
     return tx
 
 
-def apply_successful_payment(
-    db,
+async def apply_successful_payment(
+    db: AsyncSession,
     *,
-    user,
+    user: User,
     plan_id: str,
     reference: str,
     customer_code: str | None,
@@ -90,7 +93,7 @@ def apply_successful_payment(
     paid_at: datetime | None = None,
 ) -> BillingTransaction:
     plan_id = normalize_plan_id(plan_id)
-    tx = _tx_by_reference(db, reference)
+    tx = await _tx_by_reference(db, reference)
     if not tx:
         plan = get_plan(plan_id)
         tx = BillingTransaction(
@@ -105,20 +108,20 @@ def apply_successful_payment(
         )
         db.add(tx)
     else:
-        tx.status = "success"
+        tx.status = "SUCCESS"
         tx.paystack_transaction_id = (
             paystack_transaction_id or tx.paystack_transaction_id
         )
-        tx.paid_at = paid_at or tx.paid_at or datetime.utcnow()
+        tx.paid_at = paid_at or tx.paid_at or aware_datetime_now()
 
     from_plan = user.current_plan or user.subscription_plan
     activate_plan_on_user(
         user, plan_id, reference=reference, customer_code=customer_code
     )
-    sub = sync_subscription_row(db, user)
-    sub.status = "active"
+    sub = await sync_subscription_row(db, user)
+    sub.status = "ACTIVE"
 
-    create_invoice(
+    await create_invoice(
         db,
         user_id=user.id,
         transaction_id=tx.id,
@@ -136,13 +139,15 @@ def apply_successful_payment(
         to_plan=plan_id,
         reference=reference,
     )
-    db.commit()
-    db.refresh(tx)
+    await db.commit()
+    await db.refresh(tx)
     return tx
 
 
-def verify_and_activate_subscription(db, user, reference: str) -> BillingTransaction:
-    tx = _tx_by_reference(db, reference)
+async def verify_and_activate_subscription(
+    db: AsyncSession, user: User, reference: str
+) -> BillingTransaction:
+    tx = await _tx_by_reference(db, reference)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
@@ -151,7 +156,7 @@ def verify_and_activate_subscription(db, user, reference: str) -> BillingTransac
             status_code=403, detail="Transaction does not belong to this account"
         )
 
-    if tx.status == "success":
+    if tx.status == "SUCCESS":
         return tx
 
     try:
@@ -172,7 +177,7 @@ def verify_and_activate_subscription(db, user, reference: str) -> BillingTransac
         )
 
     if status == "success":
-        return apply_successful_payment(
+        return await apply_successful_payment(
             db,
             user=user,
             plan_id=plan_id,
@@ -182,9 +187,9 @@ def verify_and_activate_subscription(db, user, reference: str) -> BillingTransac
             paid_at=paid_at,
         )
 
-    tx.status = "failed" if status in {"failed", "reversed"} else "abandoned"
+    tx.status = "FAILED" if status in {"failed", "reversed"} else "ABANDONED"
     mark_payment_failed(user)
-    sync_subscription_row(db, user)
+    await sync_subscription_row(db, user)
     add_billing_history(
         db,
         user_id=user.id,
@@ -194,35 +199,37 @@ def verify_and_activate_subscription(db, user, reference: str) -> BillingTransac
         to_plan=plan_id,
         reference=reference,
     )
-    db.commit()
+    await db.commit()
     return tx
 
 
-def cancel_user_subscription(db, user, reason: str | None = None) -> Subscription:
+async def cancel_user_subscription(
+    db: AsyncSession, user: User, reason: str | None = None
+) -> Subscription:
     prev = user.current_plan or user.subscription_plan
     cancel_subscription(user)
-    sub = sync_subscription_row(db, user)
-    sub.status = "cancelled"
-    sub.cancelled_at = datetime.utcnow()
+    sub = await sync_subscription_row(db, user)
+    sub.status = "CANCELLED"
+    sub.cancelled_at = aware_datetime_now()
     add_billing_history(
         db,
         user_id=user.id,
-        action="cancel",
-        status="cancelled",
+        action="CANCEL",
+        status="CANCELLED",
         from_plan=prev,
         to_plan=prev,
         reference=user.subscription_reference,
         note=reason,
     )
-    db.commit()
+    await db.commit()
     return sub
 
 
-def reactivate_user_subscription(db, user) -> Subscription:
+async def reactivate_user_subscription(db, user) -> Subscription:
     prev = user.current_plan or user.subscription_plan
     reactivate_subscription(user)
-    sub = sync_subscription_row(db, user)
-    sub.status = "active"
+    sub = await sync_subscription_row(db, user)
+    sub.status = "ACTIVE"
     add_billing_history(
         db,
         user_id=user.id,
@@ -232,23 +239,18 @@ def reactivate_user_subscription(db, user) -> Subscription:
         to_plan=prev,
         reference=user.subscription_reference,
     )
-    db.commit()
+    await db.commit()
     return sub
 
 
-def billing_snapshot(db, user) -> dict:
-    transactions = (
-        db.query(BillingTransaction)
-        .filter(BillingTransaction.user_id == user.id)
-        .order_by(BillingTransaction.id.desc())
+async def billing_snapshot(db: AsyncSession, user: User) -> dict:
+    stmt = (
+        select(BillingTransaction)
+        .where(BillingTransaction.user_id == user.id)
         .limit(20)
-        .all()
     )
-    invoices = (
-        db.query(Invoice)
-        .filter(Invoice.user_id == user.id)
-        .order_by(Invoice.id.desc())
-        .limit(20)
-        .all()
-    )
+    transactions = (await db.execute(stmt)).scalars().all()
+
+    stmt = select(Invoice).where(Invoice.user_id == user.id).limit(20)
+    invoices = (await db.execute(stmt)).scalars().all()
     return {"transactions": transactions, "invoices": invoices}

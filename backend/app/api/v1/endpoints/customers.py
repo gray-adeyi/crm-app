@@ -1,5 +1,7 @@
-from fastapi import APIRouter, HTTPException
-from sqlalchemy import func
+from uuid import UUID
+
+from fastapi import APIRouter, HTTPException, status
+from sqlalchemy import func, select
 
 from app.api.deps import AsyncDBSession, SaasUser
 from app.models import Customer
@@ -11,33 +13,33 @@ from app.services.rbac import assert_permission
 router = APIRouter(prefix="/customers", tags=["customers"])
 
 
-def _get_owned_customer_or_404(db, customer_id: int, user_id: int) -> Customer:
-    customer = (
-        db.query(Customer)
-        .filter(Customer.id == customer_id, Customer.user_id == user_id)
-        .first()
+async def _get_owned_customer_or_404(
+    db: AsyncDBSession, customer_id: UUID, user_id: UUID
+) -> Customer:
+    stmt = select(Customer).where(
+        Customer.id == customer_id, Customer.user_id == user_id
     )
+    customer = (await db.execute(stmt)).scalar_one_or_none()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     return customer
 
 
-@router.post("", response_model=CustomerResponse)
+@router.post("", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)
 async def create_customer(customer: CustomerCreate, db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "customers:write")
 
-    max_c = effective_max_customers(user)
-    if max_c is not None:
-        cnt = (
-            db.query(func.count(Customer.id))
-            .filter(Customer.user_id == user.id)
-            .scalar()
-            or 0
-        )
-        if int(cnt) >= int(max_c):
+    max_customers = effective_max_customers(user)
+    if max_customers is not None:
+        stmt = select(func.count(Customer.id)).where(Customer.user_id == user.id)
+        count = (await db.execute(stmt)).scalar_one_or_none() or 0
+        if int(count) >= int(max_customers):
             raise HTTPException(
                 status_code=403,
-                detail="Customer limit reached for your plan. Upgrade to add more customers.",
+                detail=(
+                    "Customer limit reached for your plan."
+                    " Upgrade to add more customers."
+                ),
             )
 
     instagram = customer.instagram_handle.strip() if customer.instagram_handle else None
@@ -48,7 +50,7 @@ async def create_customer(customer: CustomerCreate, db: AsyncDBSession, user: Sa
         user_id=user.id,
     )
     db.add(row)
-    db.flush()
+    await db.flush()
     log_user_activity(
         db,
         user_id=user.id,
@@ -64,28 +66,24 @@ async def create_customer(customer: CustomerCreate, db: AsyncDBSession, user: Sa
         summary=f"Customer #{row.id} created",
         payload={"customer_id": row.id},
     )
-    db.commit()
-    db.refresh(row)
+    await db.commit()
+    await db.refresh(row)
     return row
 
 
 @router.get("", response_model=list[CustomerResponse])
 async def get_customers(db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "customers:read")
-    return (
-        db.query(Customer)
-        .filter(Customer.user_id == user.id)
-        .order_by(Customer.id.asc())
-        .all()
-    )
+    stmt = select(Customer).where(Customer.user_id == user.id)
+    return (await db.execute(stmt)).scalars().all()
 
 
 @router.put("/{customer_id}", response_model=CustomerResponse)
 async def update_customer(
-    customer_id: int, customer: CustomerCreate, db: AsyncDBSession, user: SaasUser
+    customer_id: UUID, customer: CustomerCreate, db: AsyncDBSession, user: SaasUser
 ):
     assert_permission(user, "customers:write")
-    existing = _get_owned_customer_or_404(db, customer_id, user.id)
+    existing = await _get_owned_customer_or_404(db, customer_id, user.id)
     instagram = customer.instagram_handle.strip() if customer.instagram_handle else None
     existing.name = customer.name.strip()
     existing.phone = customer.phone.strip()
@@ -105,19 +103,18 @@ async def update_customer(
         summary=f"Customer #{existing.id} updated",
         payload={"customer_id": existing.id},
     )
-    db.commit()
-    db.refresh(existing)
+    await db.commit()
+    await db.refresh(existing)
     return existing
 
 
-@router.delete("/{customer_id}")
+@router.delete("/{customer_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_customer(customer_id: int, db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "customers:delete")
-    existing = (
-        db.query(Customer)
-        .filter(Customer.id == customer_id, Customer.user_id == user.id)
-        .first()
+    stmt = select(Customer).where(
+        Customer.id == customer_id, Customer.user_id == user.id
     )
+    existing = (await db.execute(stmt)).scalar_one_or_none()
     if not existing:
         raise HTTPException(status_code=404, detail="Customer not found")
     cid = existing.id
@@ -136,6 +133,5 @@ async def delete_customer(customer_id: int, db: AsyncDBSession, user: SaasUser):
         summary=f"Customer #{cid} deleted",
         payload={"customer_id": cid},
     )
-    db.delete(existing)
-    db.commit()
-    return {"message": "Deleted"}
+    await db.delete(existing)
+    await db.commit()

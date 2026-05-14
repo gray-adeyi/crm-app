@@ -1,3 +1,4 @@
+from uuid import UUID
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -24,7 +25,7 @@ def _derive_category(typ: str) -> str:
 class NotificationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=False)
 
-    id: int
+    id: UUID
     type: str
     title: str
     body: str | None = None
@@ -76,4 +77,4 @@ class NotificationResponse(BaseModel):
 
 
 class NotificationMarkReadRequest(BaseModel):
-    ids: list[int] = Field(default_factory=list, max_length=200)
+    ids: list[UUID] = Field(default_factory=list, max_length=200)

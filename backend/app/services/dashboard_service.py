@@ -1,7 +1,9 @@
+from app.core.utils import aware_datetime_now
+from sqlalchemy.ext.asyncio import AsyncSession
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
@@ -50,79 +52,60 @@ def _add_months(d: date, months: int) -> date:
     return date(y, m, day)
 
 
-def build_dashboard(db: Session, user: User) -> DashboardResponse:
+async def build_dashboard(db: AsyncSession, user: User) -> DashboardResponse:
     user_id = user.id
-    total_customers = int(
-        db.query(func.count(Customer.id)).filter(Customer.user_id == user_id).scalar()
-        or 0
-    )
-    total_orders = int(
-        db.query(func.count(Order.id)).filter(Order.user_id == user_id).scalar() or 0
-    )
+    stmt = select(func.count(Customer.id)).where(Customer.user_id == user_id)
+    total_customers = (await db.execute(stmt)).scalar_one_or_none() or 0
 
-    total_collected = int(
-        db.query(func.coalesce(func.sum(Order.amount_paid), 0))
-        .filter(Order.user_id == user_id)
-        .scalar()
-        or 0
-    )
-    gross_sales = int(
-        db.query(func.coalesce(func.sum(Order.price), 0))
-        .filter(Order.user_id == user_id)
-        .scalar()
-        or 0
-    )
-    outstanding = int(
-        db.query(func.coalesce(func.sum(Order.balance), 0))
-        .filter(Order.user_id == user_id)
-        .scalar()
-        or 0
-    )
+    stmt = select(func.count(Order.id)).where(Order.user_id == user_id)
+    total_orders = (await db.execute(stmt)).scalar_one_or_none() or 0
 
-    today = date.today()
+    stmt = select(func.coalesce(func.sum(Order.amount_paid), 0)).where(
+        Order.user_id == user_id
+    )
+    total_collected = (await db.execute(stmt)).scalar_one_or_none() or 0
+
+    stmt = select(func.coalesce(func.sum(Order.price), 0))
+    gross_sales = (await db.execute(stmt)).scalar_one_or_none() or 0
+
+    stmt = select(func.coalesce(func.sum(Order.balance), 0))
+    outstanding = (await db.execute(stmt)).scalar_one_or_none() or 0
+
+    today = aware_datetime_now().today()
     m_start = _month_start(today)
     next_m = _add_months(today.replace(day=1), 1)
     m_end = datetime(next_m.year, next_m.month, next_m.day)
 
-    monthly_revenue = int(
-        db.query(func.coalesce(func.sum(Order.amount_paid), 0))
-        .filter(
-            Order.user_id == user_id,
-            Order.created_at.isnot(None),
-            Order.created_at >= m_start,
-            Order.created_at < m_end,
-        )
-        .scalar()
-        or 0
+    # TODO: Some of theses queries can be batched
+    stmt = select(func.coalesce(func.sum(Order.amount_paid), 0)).where(
+        Order.user_id == user_id,
+        Order.created_at.isnot(None),
+        Order.created_at >= m_start,
+        Order.created_at < m_end,
     )
+    monthly_revenue = (await db.execute(stmt)).scalar_one_or_none() or 0
 
-    orders_pending = int(
-        db.query(func.count(Order.id))
-        .filter(Order.user_id == user_id, Order.status == "pending")
-        .scalar()
-        or 0
+    stmt = select(func.count(Order.id)).where(
+        Order.user_id == user_id, Order.status == "PENDING"
     )
-    orders_partial = int(
-        db.query(func.count(Order.id))
-        .filter(Order.user_id == user_id, Order.status == "partial")
-        .scalar()
-        or 0
+    orders_pending = (await db.execute(stmt)).scalar_one_or_none() or 0
+
+    stmt = select(func.count(Order.id)).where(
+        Order.user_id == user_id, Order.status == "PARTIAL"
     )
-    orders_paid = int(
-        db.query(func.count(Order.id))
-        .filter(Order.user_id == user_id, Order.status == "paid")
-        .scalar()
-        or 0
+    orders_partial = (await db.execute(stmt)).scalar_one_or_none() or 0
+
+    stmt = select(func.count(Order.id)).where(
+        Order.user_id == user_id, Order.status == "PAID"
     )
-    failed_payments = int(
-        db.query(func.count(BillingTransaction.id))
-        .filter(
-            BillingTransaction.user_id == user_id,
-            BillingTransaction.status.in_(["failed", "abandoned"]),
-        )
-        .scalar()
-        or 0
+    orders_paid = (await db.execute(stmt)).scalar_one_or_none() or 0
+
+    stmt = select(func.count(BillingTransaction.id)).where(
+        BillingTransaction.user_id == user_id,
+        BillingTransaction.status.in_(["FAILED", "ABANDONED"]),
     )
+    failed_payments = (await db.execute(stmt)).scalar_one_or_none() or 0
+
     mrr = int(
         db.query(func.coalesce(func.sum(BillingTransaction.amount), 0))
         .filter(
@@ -312,7 +295,7 @@ def build_dashboard(db: Session, user: User) -> DashboardResponse:
             Product.user_id == user_id,
             Product.quantity_in_stock > 0,
             or_(
-                Product.is_low_stock == True,
+                Product.is_low_stock,
                 (Product.reorder_threshold > 0)
                 & (Product.quantity_in_stock <= Product.reorder_threshold),
             ),  # noqa: E712

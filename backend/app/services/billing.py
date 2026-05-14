@@ -1,95 +1,124 @@
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from uuid import UUID
+from datetime import datetime, timedelta
+from typing import Literal, TypedDict, cast
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.utils import aware_datetime_now
 from app.models import BillingHistory, Subscription
+from app.models.users import User
 
-SUBSCRIPTION_PLANS: dict[str, dict[str, Any]] = {
-    "starter": {
-        "id": "starter",
-        "name": "Starter",
-        "price_ngn": 15000,
-        "interval": "monthly",
-        "max_customers": 50,
-        "features": [
-            "Up to 50 customers",
-            "Basic tracking",
-            "Limited analytics dashboard",
-        ],
-        "gates": {
-            "inventory_writes": True,
-            "advanced_exports": False,
-            "multi_user": False,
-        },
-    },
-    "growth": {
-        "id": "growth",
-        "name": "Growth",
-        "price_ngn": 50000,
-        "interval": "monthly",
-        "max_customers": None,
-        "features": [
-            "Unlimited customers",
-            "Payment tracking",
-            "Analytics",
-            "Inventory system",
-        ],
-        "gates": {
-            "inventory_writes": True,
-            "advanced_exports": False,
-            "multi_user": False,
-        },
-    },
-    "enterprise": {
-        "id": "enterprise",
-        "name": "Enterprise",
-        "price_ngn": 100000,
-        "interval": "monthly",
-        "max_customers": None,
-        "features": [
-            "Multi-user access",
-            "Advanced analytics",
-            "Automated receipts",
-            "Priority support",
-            "Advanced exports",
-        ],
-        "gates": {
-            "inventory_writes": True,
-            "advanced_exports": True,
-            "multi_user": True,
-        },
-    },
+SubscriptionPlanIds = Literal["STARTER", "GROWTH", "ENTERPRICE"]
+
+
+class GatesSettings(TypedDict):
+    inventory_writes: bool
+    advanced_exports: bool
+    multi_user: bool
+
+
+class SubscriptionPlan(TypedDict):
+    id: SubscriptionPlanIds
+    name: str
+    price_ngn: int
+    interval: str
+    max_customers: int
+    features: list[str]
+    gates: GatesSettings
+
+
+SUBSCRIPTION_PLANS: dict[SubscriptionPlanIds, SubscriptionPlan] = {
+    "STARTER": SubscriptionPlan(
+        **{
+            "id": "starter",
+            "name": "Starter",
+            "price_ngn": 15000,
+            "interval": "MONTHLY",
+            "max_customers": 50,
+            "features": [
+                "Up to 50 customers",
+                "Basic tracking",
+                "Limited analytics dashboard",
+            ],
+            "gates": {
+                "inventory_writes": True,
+                "advanced_exports": False,
+                "multi_user": False,
+            },
+        }
+    ),
+    "GROWTH": SubscriptionPlan(
+        **{
+            "id": "GROWTH",
+            "name": "Growth",
+            "price_ngn": 50000,
+            "interval": "MONTHLY",
+            "max_customers": None,
+            "features": [
+                "Unlimited customers",
+                "Payment tracking",
+                "Analytics",
+                "Inventory system",
+            ],
+            "gates": {
+                "inventory_writes": True,
+                "advanced_exports": False,
+                "multi_user": False,
+            },
+        }
+    ),
+    "ENTERPRICE": SubscriptionPlan(
+        **{
+            "id": "ENTERPRICE",
+            "name": "Enterprise",
+            "price_ngn": 100000,
+            "interval": "monthly",
+            "max_customers": None,
+            "features": [
+                "Multi-user access",
+                "Advanced analytics",
+                "Automated receipts",
+                "Priority support",
+                "Advanced exports",
+            ],
+            "gates": {
+                "inventory_writes": True,
+                "advanced_exports": True,
+                "multi_user": True,
+            },
+        }
+    ),
 }
 
-PLAN_ALIASES: dict[str, str] = {"pro": "enterprise"}
+
+PLAN_ALIASES: dict[str, SubscriptionPlanIds] = {"PRO": "ENTERPRICE"}
 
 
-def normalize_plan_id(plan_id: str | None) -> str:
-    raw = (plan_id or "starter").strip().lower()
-    return PLAN_ALIASES.get(raw, raw)
+def normalize_plan_id(plan_id: str | None) -> SubscriptionPlanIds | None:
+    raw = (plan_id or "STARTER").strip().upper()
+    return PLAN_ALIASES.get(raw)
 
 
 def plan_max_customers(plan_id: str) -> int | None:
     nid = normalize_plan_id(plan_id)
-    plan = SUBSCRIPTION_PLANS.get(nid, SUBSCRIPTION_PLANS["starter"])
+    plan = SUBSCRIPTION_PLANS.get(nid or "STARTER")
+    plan = cast(SubscriptionPlan, plan)
     return plan.get("max_customers")
 
 
-def get_plan(plan_id: str) -> dict[str, Any]:
+def get_plan(plan_id: str) -> SubscriptionPlan:
     nid = normalize_plan_id(plan_id)
-    return SUBSCRIPTION_PLANS.get(nid, SUBSCRIPTION_PLANS["starter"])
+    return cast(SubscriptionPlan, SUBSCRIPTION_PLANS.get(nid or "STARTER"))
 
 
-def plan_feature_gates(plan_id: str) -> dict[str, bool]:
-    return dict(get_plan(plan_id).get("gates") or {})
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+def plan_feature_gates(plan_id: str) -> GatesSettings:
+    return get_plan(plan_id).get("gates")
 
 
 def next_renewal_date(from_date: datetime | None = None) -> datetime:
-    base = from_date or _now()
+    base = from_date or aware_datetime_now()
     return base + timedelta(days=30)
 
 
@@ -102,13 +131,13 @@ def activate_plan_on_user(
 ) -> None:
     nid = normalize_plan_id(plan_id)
     if nid not in SUBSCRIPTION_PLANS:
-        nid = "starter"
+        nid = "STARTER"
     user.subscription_plan = nid
     user.current_plan = nid
-    user.subscription_status = "active"
+    user.subscription_status = "ACTIVE"
     user.subscription_ends_at = next_renewal_date()
     user.renewal_date = user.subscription_ends_at
-    user.billing_cycle = "monthly"
+    user.billing_cycle = "MONTHLY"
     user.trial_end_date = None
     user.trial_ends_at = None
     user.trial_started_at = None
@@ -119,13 +148,9 @@ def activate_plan_on_user(
     user.subscription_grace_until = None
 
 
-def sync_subscription_row(db, user) -> Subscription:
-    row = (
-        db.query(Subscription)
-        .filter(Subscription.user_id == user.id)
-        .order_by(Subscription.id.desc())
-        .first()
-    )
+async def sync_subscription_row(db: AsyncSession, user: User) -> Subscription:
+    stmt = select(Subscription).where(Subscription.user_id == user.id)
+    row = (await db.execute(stmt)).scalar_one_or_none()
     if not row:
         row = Subscription(
             user_id=user.id,
@@ -144,28 +169,28 @@ def sync_subscription_row(db, user) -> Subscription:
 
 
 def mark_payment_failed(user) -> None:
-    now = _now()
-    user.subscription_status = "overdue"
+    now = aware_datetime_now()
+    user.subscription_status = "OVERDUE"
     user.subscription_grace_until = now + timedelta(days=settings.BILLING_GRACE_DAYS)
 
 
 def cancel_subscription(user) -> None:
-    user.subscription_status = "cancelled"
+    user.subscription_status = "CANCELLED"
     user.subscription_grace_until = None
 
 
 def reactivate_subscription(user) -> None:
-    user.subscription_status = "active"
+    user.subscription_status = "ACTIVE"
     user.subscription_grace_until = None
-    if not user.renewal_date or user.renewal_date < _now():
+    if not user.renewal_date or user.renewal_date < aware_datetime_now():
         user.renewal_date = next_renewal_date()
         user.subscription_ends_at = user.renewal_date
 
 
 def add_billing_history(
-    db,
+    db: AsyncSession,
     *,
-    user_id: int,
+    user_id: UUID,
     action: str,
     status: str,
     from_plan: str | None,

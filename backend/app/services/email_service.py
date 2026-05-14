@@ -244,16 +244,10 @@ async def send_email(
 ) -> None:
     """Async-safe: runs synchronous providers in a worker thread."""
 
-    import asyncio
-
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        _executor,
-        lambda: _send_sync(
-            subject=subject,
-            to_email=to_email,
-            html=html,
-            text=text,
-            attachments=attachments,
-        ),
+    _send_sync(
+        subject=subject,
+        to_email=to_email,
+        html=html,
+        text=text,
+        attachments=attachments,
     )

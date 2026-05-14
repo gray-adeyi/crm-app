@@ -1,8 +1,10 @@
+from uuid import UUID
+
 from pydantic import BaseModel
 
 
 class RecentOrderDTO(BaseModel):
-    id: int
+    id: UUID
     product: str
     total_price: int
     amount_paid: int
@@ -62,7 +64,7 @@ class DashboardResponse(BaseModel):
 
 
 class DeliveryDTO(BaseModel):
-    id: int
+    id: UUID
     customer_name: str | None = None
     product: str
     quantity: int

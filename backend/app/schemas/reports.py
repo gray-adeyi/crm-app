@@ -1,5 +1,7 @@
 """Pydantic models for downloadable / scheduled SaaS summaries (optional endpoints)."""
 
+from uuid import UUID
+
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
@@ -8,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 class ActivityLogOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: UUID
     action: str
     entity_type: str
     entity_id: int | None
@@ -19,7 +21,7 @@ class ActivityLogOut(BaseModel):
 class TransactionLogOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: UUID
     category: str
     summary: str
     payload_json: str | None = None
@@ -43,7 +45,7 @@ class ReportBestsellerRow(BaseModel):
 
 
 class ReportTopCustomer(BaseModel):
-    customer_id: int
+    customer_id: UUID
     name: str
     revenue: int
 
@@ -63,7 +65,7 @@ class ReportMonthlyDispatch(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: UUID
     report_kind: str
     period_key: str
     sent_at: datetime | None = None

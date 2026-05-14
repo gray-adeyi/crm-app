@@ -1,15 +1,16 @@
 from datetime import date, datetime, time
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class OrderCreate(BaseModel):
     product: str | None = Field(default=None, min_length=1, max_length=255)
-    product_id: int | None = Field(default=None, ge=1)
+    product_id: UUID | None = Field(default=None, ge=1)
     quantity: int = Field(default=1, ge=1, le=100000)
     total_price: int = Field(..., ge=0)
     amount_paid: int = Field(default=0, ge=0)
-    customer_id: int = Field(..., ge=1)
+    customer_id: UUID = Field(..., ge=1)
     fulfillment_type: str = Field(default="delivery", max_length=32)
     delivery_date: date | None = None
     delivery_time: time | None = None
@@ -43,11 +44,11 @@ class OrderCreate(BaseModel):
 
 class OrderUpdate(BaseModel):
     product: str | None = Field(default=None, min_length=1, max_length=255)
-    product_id: int | None = Field(default=None, ge=1)
+    product_id: UUID | None
     quantity: int = Field(..., ge=1, le=100000)
     total_price: int = Field(..., ge=0)
     amount_paid: int = Field(..., ge=0)
-    customer_id: int = Field(..., ge=1)
+    customer_id: UUID
     status: str = Field(..., min_length=1, max_length=32)
     fulfillment_type: str = Field(default="delivery", max_length=32)
     delivery_date: date | None = None
@@ -83,7 +84,7 @@ class OrderUpdate(BaseModel):
 class OrderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: UUID
     product: str
     product_id: int | None = None
     quantity: int
@@ -91,8 +92,8 @@ class OrderResponse(BaseModel):
     amount_paid: int
     balance: int
     status: str
-    customer_id: int
-    user_id: int
+    customer_id: UUID
+    user_id: UUID
     fulfillment_type: str = "delivery"
     delivery_date: date | None = None
     delivery_time: time | None = None

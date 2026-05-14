@@ -1,4 +1,9 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from app.models.inventory_movements import InventoryMovement
+from app.models.customers import Customer
+from sqlalchemy import select
+from uuid import UUID
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 
 from app.api.deps import AsyncDBSession, SaasUser
 from app.models import Order, Product
@@ -10,14 +15,14 @@ from app.services.rbac import assert_permission
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 
-def _get_owned_customer_or_404(db, customer_id: int, user_id: int):
-    from app.models import Customer
+async def _get_owned_customer_or_404(
+    db: AsyncDBSession, customer_id: UUID, user_id: UUID
+):
 
-    customer = (
-        db.query(Customer)
-        .filter(Customer.id == customer_id, Customer.user_id == user_id)
-        .first()
+    stmt = select(Customer).where(
+        Customer.id == customer_id, Customer.user_id == user_id
     )
+    customer = (await db.execute(stmt)).scalar_one_or_none()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     return customer
@@ -33,19 +38,18 @@ def _normalize_amounts(total_price: int, amount_paid: int) -> tuple[int, int]:
     return int(total_price), int(amount_paid)
 
 
-def _get_owned_product_or_404(db, product_id: int, user_id: int) -> Product:
-    product = (
-        db.query(Product)
-        .filter(Product.id == product_id, Product.user_id == user_id)
-        .first()
-    )
+async def _get_owned_product_or_404(
+    db: AsyncDBSession, product_id: UUID, user_id: UUID
+) -> Product:
+    stmt = select(Product).filter(Product.id == product_id, Product.user_id == user_id)
+    product = (await db.execute(stmt)).scalar_one_or_none()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     return product
 
 
 def _deduct_stock_or_400(
-    db, *, product: Product, qty: int, user_id: int, order_id: int
+    db: AsyncDBSession, *, product: Product, qty: int, user_id: UUID, order_id: UUID
 ) -> None:
     if qty <= 0:
         raise HTTPException(status_code=400, detail="quantity must be >= 1")
@@ -54,7 +58,6 @@ def _deduct_stock_or_400(
             status_code=400, detail=f"Insufficient stock for {product.name}"
         )
     product.quantity_in_stock = int(product.quantity_in_stock or 0) - int(qty)
-    from app.models.entities import InventoryMovement
 
     db.add(
         InventoryMovement(
@@ -76,7 +79,7 @@ async def create_order(
     background_tasks: BackgroundTasks,
 ):
     assert_permission(user, "orders:write")
-    _get_owned_customer_or_404(db, order.customer_id, user.id)
+    await _get_owned_customer_or_404(db, order.customer_id, user.id)
 
     total_price, amount_paid = _normalize_amounts(order.total_price, order.amount_paid)
     balance = compute_balance(total_price, amount_paid)
@@ -86,7 +89,7 @@ async def create_order(
     product_id = order.product_id
     product_row = None
     if product_id:
-        product_row = _get_owned_product_or_404(db, product_id, user.id)
+        product_row = await _get_owned_product_or_404(db, product_id, user.id)
         product_name = product_row.name
 
     ft = (order.fulfillment_type or "delivery").lower()
@@ -120,7 +123,7 @@ async def create_order(
     )
     try:
         db.add(row)
-        db.flush()  # allocate row.id for movement link
+        await db.flush()  # allocate row.id for movement link
         if product_row and not row.stock_deducted:
             _deduct_stock_or_400(
                 db,
@@ -156,10 +159,10 @@ async def create_order(
                 "total": total_price,
             },
         )
-        db.commit()
-        db.refresh(row)
+        await db.commit()
+        await db.refresh(row)
     except Exception:
-        db.rollback()
+        await db.rollback()
         raise
 
     # fire-and-forget: email notification + internal notification row
@@ -169,7 +172,7 @@ async def create_order(
         background_tasks.add_task(enqueue_order_created_notifications, row.id, user.id)
     except Exception:
         # never block order creation on email
-        pass
+        ...
 
     try:
         if product_row:
@@ -183,30 +186,28 @@ async def create_order(
                     enqueue_low_stock_alert, product_row.id, user.id
                 )
     except Exception:
-        pass
+        ...
     return row
 
 
 @router.get("", response_model=list[OrderResponse])
 async def list_orders(db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "orders:read")
-    return (
-        db.query(Order).filter(Order.user_id == user.id).order_by(Order.id.desc()).all()
-    )
+    stmt = select(Order).filter(Order.user_id == user.id)
+    return (await db.execute(stmt)).scalars().all()
 
 
 @router.put("/{order_id}", response_model=OrderResponse)
 async def update_order(
-    order_id: int, payload: OrderUpdate, db: AsyncDBSession, user: SaasUser
+    order_id: UUID, payload: OrderUpdate, db: AsyncDBSession, user: SaasUser
 ):
     assert_permission(user, "orders:write")
-    existing = (
-        db.query(Order).filter(Order.id == order_id, Order.user_id == user.id).first()
-    )
+    stmt = select(Order).filter(Order.id == order_id, Order.user_id == user.id)
+    existing = (await db.execute(stmt)).scalar_one_or_none()
     if not existing:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    _get_owned_customer_or_404(db, payload.customer_id, user.id)
+    await _get_owned_customer_or_404(db, payload.customer_id, user.id)
 
     total_price, amount_paid = _normalize_amounts(
         payload.total_price, payload.amount_paid
@@ -220,7 +221,7 @@ async def update_order(
     new_product_name = (payload.product.strip() if payload.product else None) or ""
     product_row = None
     if new_product_id:
-        product_row = _get_owned_product_or_404(db, new_product_id, user.id)
+        product_row = await _get_owned_product_or_404(db, new_product_id, user.id)
         new_product_name = product_row.name
 
     # stock adjustment (best-effort)
@@ -243,7 +244,6 @@ async def update_order(
                 product_row.quantity_in_stock = int(
                     product_row.quantity_in_stock or 0
                 ) + abs(int(delta_qty))
-                from app.models.entities import InventoryMovement
 
                 db.add(
                     InventoryMovement(
@@ -315,17 +315,17 @@ async def update_order(
         payload={"order_id": existing.id, "status": normalized_status},
     )
 
-    db.commit()
-    db.refresh(existing)
+    await db.commit()
+    await db.refresh(existing)
     return existing
 
 
-@router.delete("/{order_id}")
+@router.delete("/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_order(order_id: int, db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "orders:delete")
-    existing = (
-        db.query(Order).filter(Order.id == order_id, Order.user_id == user.id).first()
-    )
+    stmt = select(Order).filter(Order.id == order_id, Order.user_id == user.id)
+
+    existing = (await db.execute(stmt)).scalar_one_or_none()
     if not existing:
         raise HTTPException(status_code=404, detail="Order not found")
     oid = existing.id
@@ -344,6 +344,5 @@ async def delete_order(order_id: int, db: AsyncDBSession, user: SaasUser):
         summary=f"Order #{oid} deleted",
         payload={"order_id": oid},
     )
-    db.delete(existing)
-    db.commit()
-    return {"message": "Order deleted"}
+    await db.delete(existing)
+    await db.commit()

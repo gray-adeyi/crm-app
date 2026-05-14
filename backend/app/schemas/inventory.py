@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,7 +28,7 @@ class ProductUpdate(BaseModel):
 class ProductResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: UUID
     name: str
     sku: str | None = None
     category: str | None = None
@@ -38,7 +39,7 @@ class ProductResponse(BaseModel):
     peak_quantity: int | None = 0
     is_low_stock: bool | None = False
     image: str | None = None
-    user_id: int
+    user_id: UUID
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

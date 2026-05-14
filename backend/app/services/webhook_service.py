@@ -1,5 +1,9 @@
+from app.core.utils import aware_datetime_now
 import json
 from datetime import datetime
+
+from sqlalchemy import exists, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import BillingTransaction, PaymentEvent, User
 from app.services.billing import (
@@ -10,24 +14,25 @@ from app.services.billing import (
 from app.services.billing_service import apply_successful_payment
 
 
-def _already_processed(db, event_type: str, reference: str | None) -> bool:
+async def _already_processed(
+    db: AsyncSession, event_type: str, reference: str | None
+) -> bool:
     if not reference:
         return False
-    row = (
-        db.query(PaymentEvent)
-        .filter(
-            PaymentEvent.provider == "paystack",
+    stmt = select(
+        exists().where(
+            PaymentEvent.provider == "PAYATACK",
             PaymentEvent.event_type == event_type,
             PaymentEvent.reference == reference,
-            PaymentEvent.status == "processed",
+            PaymentEvent.status == "PROCESSED",
         )
-        .first()
     )
-    return row is not None
+
+    return (await db.execute(stmt)).scalar() or False
 
 
-def record_event(
-    db,
+async def record_event(
+    db: AsyncSession,
     *,
     provider: str,
     event_type: str,
@@ -44,28 +49,30 @@ def record_event(
         status="received",
     )
     db.add(row)
-    db.flush()
+    await db.flush()
     return row
 
 
-def process_paystack_event(db, payload: dict, raw_body: str) -> PaymentEvent:
+async def process_paystack_event(
+    db: AsyncSession, payload: dict, raw_body: str
+) -> PaymentEvent:
     event_type = payload.get("event") or "unknown"
     data = payload.get("data") or {}
     reference = data.get("reference")
 
-    event_row = record_event(
+    event_row = await record_event(
         db,
-        provider="paystack",
+        provider="PAYATACK",
         event_type=event_type,
         reference=reference,
         raw_body=raw_body,
         payload=payload,
     )
 
-    if _already_processed(db, event_type, reference):
-        event_row.status = "duplicate"
-        event_row.processed_at = datetime.utcnow()
-        db.commit()
+    if await _already_processed(db, event_type, reference):
+        event_row.status = "DUPLICATE"
+        event_row.processed_at = aware_datetime_now()
+        await db.commit()
         return event_row
 
     if event_type in {
@@ -77,18 +84,18 @@ def process_paystack_event(db, payload: dict, raw_body: str) -> PaymentEvent:
         user_id = metadata.get("user_id")
         plan_id = metadata.get("plan_id")
         if not user_id:
-            tx = (
-                db.query(BillingTransaction)
-                .filter(BillingTransaction.reference == reference)
-                .first()
+            stmt = select(BillingTransaction).where(
+                BillingTransaction.reference == reference
             )
+            tx = (await db.execute(stmt)).scalar_one_or_none()
             user_id = tx.user_id if tx else None
             plan_id = plan_id or (tx.plan_id if tx else None)
 
         if user_id and plan_id:
-            user = db.query(User).filter(User.id == int(user_id)).first()
+            stmt = select(User).where(User.id == user_id)
+            user = (await db.execute(stmt)).scalar_one_or_none()
             if user:
-                apply_successful_payment(
+                await apply_successful_payment(
                     db,
                     user=user,
                     plan_id=plan_id,

@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import TransactionLog, UserActivityLog
 
 
 def log_user_activity(
-    db: Session,
+    db: AsyncSession,
     *,
-    user_id: int,
+    user_id: UUID,
     action: str,
     entity_type: str,
-    entity_id: int | None,
+    entity_id: UUID | None,
     summary: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
@@ -32,9 +33,9 @@ def log_user_activity(
 
 
 def log_transaction_event(
-    db: Session,
+    db: AsyncSession,
     *,
-    user_id: int,
+    user_id: UUID,
     category: str,
     summary: str,
     payload: dict[str, Any] | None = None,

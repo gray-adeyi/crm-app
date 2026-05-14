@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from sqlalchemy import select
 
 from app.api.deps import AsyncDBSession, CurrentUser
 from app.models import BillingTransaction, User
@@ -27,16 +28,15 @@ router = APIRouter(tags=["billing"])
 
 def _billing_me_response(user: User) -> BillingMeResponse:
     effective = normalize_plan_id(
-        user.current_plan or user.subscription_plan or "starter"
+        user.current_plan or user.subscription_plan or "STARTER"
     )
-    plan = SUBSCRIPTION_PLANS.get(effective, SUBSCRIPTION_PLANS["starter"])
     mc = effective_max_customers(user)
     limits = {
         "max_customers": mc,
         "trial_all_features": trial_unlocks_entitlements(user),
     }
     return BillingMeResponse(
-        plan_id=effective,
+        plan_id=effective or "STARTER",
         status=user.subscription_status or "inactive",
         billing_cycle=user.billing_cycle or "monthly",
         renewal_date=user.renewal_date or user.subscription_ends_at,
@@ -57,7 +57,7 @@ def list_plans():
 @router.get("/billing/me", response_model=BillingMeResponse)
 async def billing_me(user: CurrentUser, db: AsyncDBSession):
     base = _billing_me_response(user)
-    snap = billing_snapshot(db, user)
+    snap = await billing_snapshot(db, user)
     base.transactions = [
         {
             "reference": t.reference,
@@ -94,7 +94,7 @@ async def subscribe_initialize(
     plan_id = normalize_plan_id(body.plan_id.strip())
     if plan_id not in SUBSCRIPTION_PLANS:
         raise HTTPException(status_code=400, detail="Invalid plan selected")
-    tx = initialize_subscription_checkout(db, user, plan_id)
+    tx = await initialize_subscription_checkout(db, user, plan_id)
     return SubscribeInitializeResponse(
         authorization_url=tx.paystack_authorization_url or "",
         access_code=tx.paystack_access_code or "",
@@ -106,8 +106,8 @@ async def subscribe_initialize(
 async def subscribe_verify(
     body: VerifyTransactionRequest, db: AsyncDBSession, user: CurrentUser
 ):
-    verify_and_activate_subscription(db, user, body.reference.strip())
-    db.refresh(user)
+    await verify_and_activate_subscription(db, user, body.reference.strip())
+    await db.refresh(user)
     return billing_me(user, db)
 
 
@@ -115,26 +115,22 @@ async def subscribe_verify(
 async def cancel_billing(
     body: CancelSubscriptionRequest, db: AsyncDBSession, user: CurrentUser
 ):
-    cancel_user_subscription(db, user, body.reason)
-    db.refresh(user)
+    await cancel_user_subscription(db, user, body.reason)
+    await db.refresh(user)
     return billing_me(user, db)
 
 
 @router.post("/billing/reactivate", response_model=BillingMeResponse)
 async def reactivate_billing(db: AsyncDBSession, user: CurrentUser):
-    reactivate_user_subscription(db, user)
-    db.refresh(user)
+    await reactivate_user_subscription(db, user)
+    await db.refresh(user)
     return billing_me(user, db)
 
 
 @router.get("/billing/transactions")
 async def billing_transactions(db: AsyncDBSession, user: CurrentUser):
-    rows = (
-        db.query(BillingTransaction)
-        .filter(BillingTransaction.user_id == user.id)
-        .order_by(BillingTransaction.id.desc())
-        .all()
-    )
+    stmt = select(BillingTransaction).where(BillingTransaction.user_id == user.id)
+    rows = (await db.execute(stmt)).scalars().all()
     return {
         "items": [
             {

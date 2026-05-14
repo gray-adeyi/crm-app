@@ -1,6 +1,7 @@
 import uuid
 
 import httpx
+from sqlalchemy import UUID
 
 from app.core.config import settings
 
@@ -22,7 +23,7 @@ def _url(path: str) -> str:
     return f"{settings.PAYSTACK_BASE_URL.rstrip('/')}{path}"
 
 
-def generate_reference(user_id: int, plan_id: str) -> str:
+def generate_reference(user_id: UUID, plan_id: str) -> str:
     return f"crm_{plan_id}_{user_id}_{uuid.uuid4().hex[:14]}"
 
 

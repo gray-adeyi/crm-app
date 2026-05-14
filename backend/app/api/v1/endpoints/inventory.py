@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import func, or_
+from uuid import UUID
+from fastapi import APIRouter, HTTPException, Query, status
+from sqlalchemy import func, or_, select
 
 from app.api.deps import AsyncDBSession, SaasUser
 from app.models import InventoryMovement, Product
@@ -17,12 +18,9 @@ from app.services.rbac import assert_permission
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 
-def _get_owned_product_or_404(db, product_id: int, user_id: int) -> Product:
-    row = (
-        db.query(Product)
-        .filter(Product.id == product_id, Product.user_id == user_id)
-        .first()
-    )
+async def _get_owned_product_or_404(db, product_id: UUID, user_id: UUID) -> Product:
+    stmt = select(Product).where(Product.id == product_id, Product.user_id == user_id)
+    row = (await db.execute(stmt)).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Inventory item not found")
     return row
@@ -47,7 +45,7 @@ async def create_product(payload: ProductCreate, db: AsyncDBSession, user: SaasU
     )
     refresh_product_stock_flags(row)
     db.add(row)
-    db.flush()
+    await db.flush()
     log_user_activity(
         db,
         user_id=user.id,
@@ -63,8 +61,8 @@ async def create_product(payload: ProductCreate, db: AsyncDBSession, user: SaasU
         summary=f"Product #{row.id} created",
         payload={"product_id": row.id},
     )
-    db.commit()
-    db.refresh(row)
+    await db.commit()
+    await db.refresh(row)
     return row
 
 
@@ -77,23 +75,23 @@ async def list_products(
 ):
     assert_permission(user, "inventory:read")
 
-    q = db.query(Product).filter(Product.user_id == user.id)
+    stmt = select(Product).where(Product.user_id == user.id)
     if search:
         s = f"%{search.strip()}%"
-        q = q.filter(Product.name.ilike(s) | Product.sku.ilike(s))
+        stmt = stmt.where(Product.name.ilike(s) | Product.sku.ilike(s))
     if category:
-        q = q.filter(Product.category == category.strip())
+        stmt = stmt.where(Product.category == category.strip())
 
-    return q.order_by(Product.id.desc()).all()
+    return (await db.execute(stmt)).scalars().all()
 
 
 @router.put("/{product_id}", response_model=ProductResponse)
-def update_product(
+async def update_product(
     product_id: int, payload: ProductUpdate, db: AsyncDBSession, user: SaasUser
 ):
     assert_permission(user, "inventory:write")
 
-    row = _get_owned_product_or_404(db, product_id, user.id)
+    row = await _get_owned_product_or_404(db, product_id, user.id)
     row.name = payload.name.strip()
     row.sku = payload.sku.strip() if payload.sku else None
     row.category = payload.category.strip() if payload.category else None
@@ -117,19 +115,16 @@ def update_product(
         summary=f"Product #{row.id} updated",
         payload={"product_id": row.id},
     )
-    db.commit()
-    db.refresh(row)
+    await db.commit()
+    await db.refresh(row)
     return row
 
 
-@router.delete("/{product_id}")
+@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_product(product_id: int, db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "inventory:delete")
-    row = (
-        db.query(Product)
-        .filter(Product.id == product_id, Product.user_id == user.id)
-        .first()
-    )
+    stmt = select(Product).where(Product.id == product_id, Product.user_id == user.id)
+    row = (await db.execute(stmt)).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Inventory item not found")
     pid = row.id
@@ -148,17 +143,16 @@ async def delete_product(product_id: int, db: AsyncDBSession, user: SaasUser):
         summary=f"Product #{pid} deleted",
         payload={"product_id": pid},
     )
-    db.delete(row)
-    db.commit()
-    return {"message": "Deleted"}
+    await db.delete(row)
+    await db.commit()
 
 
 @router.post("/{product_id}/restock", response_model=ProductResponse)
 async def restock_product(
-    product_id: int, payload: RestockRequest, db: AsyncDBSession, user: SaasUser
+    product_id: UUID, payload: RestockRequest, db: AsyncDBSession, user: SaasUser
 ):
     assert_permission(user, "inventory:write")
-    row = _get_owned_product_or_404(db, product_id, user.id)
+    row = await _get_owned_product_or_404(db, product_id, user.id)
 
     row.quantity_in_stock = int(row.quantity_in_stock or 0) + int(payload.quantity)
     refresh_product_stock_flags(row)
@@ -186,44 +180,35 @@ async def restock_product(
         summary=f"Product #{row.id} restocked +{payload.quantity}",
         payload={"product_id": row.id},
     )
-    db.commit()
-    db.refresh(row)
+    await db.commit()
+    await db.refresh(row)
     return row
 
 
 @router.get("/analytics", response_model=InventoryAnalyticsResponse)
 async def inventory_analytics(db: AsyncDBSession, user: SaasUser):
     assert_permission(user, "inventory:read")
+    stmt = select(
+        func.coalesce(func.sum(Product.unit_price * Product.quantity_in_stock), 0)
+    ).where(Product.user_id == user.id)
 
-    total_value = int(
-        db.query(
-            func.coalesce(func.sum(Product.unit_price * Product.quantity_in_stock), 0)
-        )
-        .filter(Product.user_id == user.id)
-        .scalar()
-        or 0
-    )
-    out_of_stock = int(
-        db.query(func.count(Product.id))
-        .filter(Product.user_id == user.id, Product.quantity_in_stock <= 0)
-        .scalar()
-        or 0
-    )
-    low_stock = int(
-        db.query(func.count(Product.id))
-        .filter(
-            Product.user_id == user.id,
-            Product.quantity_in_stock > 0,
-            or_(
-                Product.is_low_stock == True,
-                (Product.reorder_threshold > 0)
-                & (Product.quantity_in_stock <= Product.reorder_threshold),
-            ),  # noqa: E712
-        )
-        .scalar()
-        or 0
-    )
+    total_value = (await db.execute(stmt)).scalar_one_or_none() or 0
 
+    stmt = select(func.count(Product.id)).where(
+        Product.user_id == user.id, Product.quantity_in_stock <= 0
+    )
+    out_of_stock = (await db.execute(stmt)).scalar_one_or_none() or 0
+
+    stmt = select().where(
+        Product.user_id == user.id,
+        Product.quantity_in_stock > 0,
+        or_(
+            Product.is_low_stock == True,
+            (Product.reorder_threshold > 0)
+            & (Product.quantity_in_stock <= Product.reorder_threshold),
+        ),
+    )
+    low_stock = (await db.execute(stmt)).scalar_one_or_none() or 0
     return InventoryAnalyticsResponse(
         total_inventory_value=total_value,
         low_stock_items=low_stock,

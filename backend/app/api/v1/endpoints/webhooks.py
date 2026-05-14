@@ -6,6 +6,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.api.deps import AsyncDBSession
 from app.core.config import settings
+from app.models.payment_events import PaymentEvent
 from app.services.webhook_service import process_paystack_event
 
 router = APIRouter(tags=["webhooks"])
@@ -32,7 +33,7 @@ async def paystack_webhook(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    row = process_paystack_event(db, payload, raw)
+    row = await process_paystack_event(db, payload, raw)
     return {"received": True, "event_id": row.id, "status": row.status}
 
 
@@ -55,7 +56,6 @@ async def flutterwave_webhook(
     except json.JSONDecodeError:
         payload = {}
     reference = (payload.get("data") or {}).get("tx_ref")
-    from app.models import PaymentEvent
 
     db.add(
         PaymentEvent(

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import AsyncDBSession, CurrentUser
@@ -40,8 +41,8 @@ async def update_profile(
             payload.notification_preferences
         )
 
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     return MeResponse.model_validate(user)
 
 
@@ -53,8 +54,8 @@ async def complete_onboarding(
     user.currency = payload.currency.strip().upper()
     user.logo_url = payload.logo_url.strip() if payload.logo_url else None
     user.onboarding_completed = payload.onboarding_completed
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     return MeResponse.model_validate(user)
 
 
@@ -65,8 +66,8 @@ async def change_password(
     if not verify_password(payload.old_password, user.password):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     user.password = hash_password(payload.new_password)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     return MeResponse.model_validate(user)
 
 
@@ -79,15 +80,16 @@ async def change_email(
     new_email = str(payload.new_email).lower().strip()
     if new_email == user.email:
         raise HTTPException(status_code=400, detail="You are already using this email")
-    exists = db.query(User).filter(User.email == new_email).first()
+    stmt = select(User).where(User.email == new_email)
+    exists = (await db.execute(stmt)).scalar_one_or_none()
     if exists:
         raise HTTPException(status_code=400, detail="Email is already registered")
     user.email = new_email
     try:
-        db.commit()
-        db.refresh(user)
+        await db.commit()
+        await db.refresh(user)
     except IntegrityError:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=400, detail="Email is already registered")
     return MeResponse.model_validate(user)
 
