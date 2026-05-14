@@ -1,6 +1,6 @@
-from uuid import UUID
 from datetime import datetime, timedelta
 from typing import Literal, TypedDict, cast
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,9 +30,10 @@ class SubscriptionPlan(TypedDict):
 
 
 SUBSCRIPTION_PLANS: dict[SubscriptionPlanIds, SubscriptionPlan] = {
-    "STARTER": SubscriptionPlan(
-        **{
-            "id": "starter",
+    "STARTER": cast(
+        SubscriptionPlan,
+        {
+            "id": "STARTER",
             "name": "Starter",
             "price_ngn": 15000,
             "interval": "MONTHLY",
@@ -47,10 +48,11 @@ SUBSCRIPTION_PLANS: dict[SubscriptionPlanIds, SubscriptionPlan] = {
                 "advanced_exports": False,
                 "multi_user": False,
             },
-        }
+        },
     ),
-    "GROWTH": SubscriptionPlan(
-        **{
+    "GROWTH": cast(
+        SubscriptionPlan,
+        {
             "id": "GROWTH",
             "name": "Growth",
             "price_ngn": 50000,
@@ -67,10 +69,11 @@ SUBSCRIPTION_PLANS: dict[SubscriptionPlanIds, SubscriptionPlan] = {
                 "advanced_exports": False,
                 "multi_user": False,
             },
-        }
+        },
     ),
-    "ENTERPRICE": SubscriptionPlan(
-        **{
+    "ENTERPRICE": cast(
+        SubscriptionPlan,
+        {
             "id": "ENTERPRICE",
             "name": "Enterprise",
             "price_ngn": 100000,
@@ -88,7 +91,7 @@ SUBSCRIPTION_PLANS: dict[SubscriptionPlanIds, SubscriptionPlan] = {
                 "advanced_exports": True,
                 "multi_user": True,
             },
-        }
+        },
     ),
 }
 
